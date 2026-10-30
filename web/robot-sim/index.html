@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TEMI 시뮬레이터</title>
+    <link rel="stylesheet" href="/shared/base.css" />
+    <link rel="stylesheet" href="./robot.css" />
+  </head>
+  <body>
+    <div class="sim-layout">
+      <section class="temi" aria-label="TEMI 화면 (시뮬레이션)">
+        <div id="screen" class="screen"></div>
+        <div id="banner" class="banner" hidden></div>
+      </section>
+
+      <aside class="card dev">
+        <div class="row between">
+          <h2>시뮬레이터 패널</h2>
+          <span id="conn" class="pill off">연결 안 됨</span>
+        </div>
+        <p class="muted small">실제 TEMI 대신 서버와 같은 프로토콜로 통신합니다. 화면 왼쪽이 TEMI 태블릿 화면입니다.</p>
+
+        <button id="conn-toggle" class="btn">연결 끊기 (Wi-Fi 끊김 흉내)</button>
+        <label>이동 속도
+          <select id="speed">
+            <option value="1">1배 (실제 시간)</option>
+            <option value="3" selected>3배</option>
+            <option value="10">10배</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="fail-next" /> 다음 이동을 실패로 보고</label>
+        <label class="check"><input type="checkbox" id="tts" checked /> 음성 안내 (저음량)</label>
+
+        <form id="scan-form" class="scan">
+          <label>QR 스캔 흉내
+            <input id="scan-input" placeholder="앱의 '개발용 코드'를 붙여 넣기" autocomplete="off" />
+          </label>
+          <button class="btn">스캔</button>
+        </form>
+
+        <h3>로그</h3>
+        <ol id="log" class="log"></ol>
+      </aside>
+    </div>
+    <script type="module" src="./robot.js"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "temi-library-rental-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TEMI 기반 도서관 이동형 물품 대여 서비스 - 서버",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/main.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TEMI 대여 관리자</title>
+    <link rel="stylesheet" href="/shared/base.css" />
+    <style>
+      .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+      section h2 { font-size: 16px; margin-bottom: 10px; }
+      td input { width: 80px; min-height: 34px; padding: 4px 8px; }
+      td .btn { min-height: 34px; padding: 4px 10px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="row between">
+        <h1>TEMI 대여 관리자</h1>
+        <span id="robot" class="pill">로봇 확인 중</span>
+      </header>
+
+      <div class="grid">
+        <section class="card">
+          <h2>재고 (로봇 바구니 적재 기준)</h2>
+          <div class="table-wrap"><table id="items"></table></div>
+        </section>
+        <section class="card">
+          <h2>반납 검수 대기</h2>
+          <p class="muted small">바구니에 반납된 물품을 확인한 뒤 검수를 누르면 재고에 반영됩니다.</p>
+          <div class="table-wrap"><table id="returns"></table></div>
+        </section>
+      </div>
+
+      <section class="card">
+        <h2>최근 요청</h2>
+        <div class="table-wrap"><table id="requests"></table></div>
+      </section>
+    </div>
+    <script type="module" src="./admin.js"></script>
+  </body>
+</html>
