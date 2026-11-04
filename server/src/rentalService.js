@@ -1,6 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { transaction } from './db.js';
 import {
+  DeskState,
   DISPATCHED_STATUSES,
   OPEN_STATUSES,
   RentalStatus,
@@ -66,6 +67,9 @@ export function createRentalService(db, bus) {
       'UPDATE requests SET status = ?, fail_reason = ?, updated_at = ?, status_changed_at = ? WHERE id = ?',
     ),
     setArrivedAt: db.prepare('UPDATE requests SET arrived_at = ? WHERE id = ?'),
+    setDeskState: db.prepare('UPDATE requests SET desk_state = ? WHERE id = ?'),
+    resolveDesk: db.prepare(`UPDATE requests SET desk_state = 'done', desk_found = ?, desk_resolved_at = ?, fail_reason = ? WHERE id = ?`),
+    nextDeskTask: db.prepare(`${REQUEST_SELECT} WHERE r.desk_state IN ('collect', 'check') ORDER BY r.id LIMIT 1`),
     setDepartedAt: db.prepare('UPDATE requests SET departed_at = ? WHERE id = ?'),
     // 배정되면 출발 준비 상태가 된다. 실제 이동은 TEMI 화면의 출발 버튼(status: moving) 이후
     markDispatched: db.prepare(
@@ -176,14 +180,31 @@ export function createRentalService(db, bus) {
     return toPublic(sql.request.get(id));
   }
 
+  // 요청이 끝날 때 바구니에 물건이 있는지 정한다. temi에는 바구니를 볼 센서가 없어 끝난 상황으로 판단한다.
+  //  대여: 출발했는데 못 건넸으면 있음, 인증 후 대여 완료 없이 시간이 지나면 모름
+  //  반납: 반납 완료면 있음, 도착 후 반납 완료 없이 시간이 지나면 모름, 그 밖에는 없음
+  function deskStateFor(req, to) {
+    if (!TERMINAL_STATUSES.includes(to)) return null;
+    if (req.type === 'return') {
+      if (to === S.COMPLETED) return DeskState.COLLECT;
+      return to === S.EXPIRED && req.status === S.ARRIVED ? DeskState.CHECK : null;
+    }
+    if (to === S.COMPLETED) return null;
+    if (req.status === S.VERIFIED) return DeskState.CHECK;
+    return req.departed_at ? DeskState.COLLECT : null;
+  }
+
   // 상태 전이와 그에 따른 재고·대여 기록 변경을 한 트랜잭션으로 처리한다.
+  // 바구니 처리가 남은 요청의 재고·대여 기록은 데스크에서 resolveDesk()로 정한다.
   function transition(id, to, reason = null) {
     const req = getRequest(id);
     if (TERMINAL_STATUSES.includes(req.status)) throw new HttpError(409, '이미 종료된 요청입니다.');
     let rentalId = req.rental_id;
+    const desk = deskStateFor(req, to);
     transaction(db, () => {
       const now = Date.now();
       sql.setStatus.run(to, reason, now, now, id);
+      if (desk) sql.setDeskState.run(desk, id);
       if (to === S.MOVING) sql.setDepartedAt.run(now, id);
       if (to === S.ARRIVED) sql.setArrivedAt.run(now, id);
       if (to === S.COMPLETED) {
@@ -196,14 +217,14 @@ export function createRentalService(db, bus) {
         } else {
           sql.markReturned.run(now, req.rental_id);
         }
-      } else if (TERMINAL_STATUSES.includes(to)) {
+      } else if (TERMINAL_STATUSES.includes(to) && !desk) {
         if (req.type === 'rental') sql.restockItem.run(req.quantity, req.item_id);
         else sql.setRentalStatus.run(RentalStatus.ACTIVE, req.rental_id);
       }
     });
     emitRequest(id);
     if (TERMINAL_STATUSES.includes(to)) {
-      if (req.type === 'rental' && to !== S.COMPLETED) emitItems();
+      if (req.type === 'rental' && to !== S.COMPLETED && !desk) emitItems();
       if (rentalId) emitRental(rentalId);
     }
     return sql.request.get(id);
@@ -236,17 +257,44 @@ export function createRentalService(db, bus) {
     return db.prepare(`${RENTAL_SELECT} ${clause} ORDER BY t.id DESC LIMIT 100`).all(...params);
   }
 
-  function inspectRental(id) {
-    const rental = sql.rental.get(id);
-    if (!rental) throw new HttpError(404, '없는 대여 기록입니다.');
-    if (rental.status !== RentalStatus.RETURNED) throw new HttpError(409, '검수 대기 상태가 아닙니다.');
+  // 데스크에서 회수 완료, 또는 물건 있음·없음을 눌렀을 때. 여기서 재고와 대여 기록을 확정한다.
+  function resolveDesk(id, found) {
+    const req = getRequest(id);
+    if (req.desk_state !== DeskState.COLLECT && req.desk_state !== DeskState.CHECK) {
+      throw new HttpError(409, '회수할 요청이 아닙니다.');
+    }
+    const checking = req.desk_state === DeskState.CHECK;
+    if (checking && typeof found !== 'boolean') throw new HttpError(400, '물건이 있는지 골라주세요.');
+    const inBasket = checking ? found : true;
+    const rental = req.type === 'rental';
+    const now = Date.now();
+    let rentalId = req.rental_id;
+    const result = rental
+      ? (inBasket ? '바구니에 있음, 재고 복구' : '학생이 가져감, 대여 처리')
+      : (inBasket ? '바구니에 있음, 반납 처리' : '바구니에 없음, 계속 대여 중');
+    const reason = checking ? `${String(req.fail_reason ?? '').replace(' · 바구니 확인 필요', '')} · ${result}` : req.fail_reason;
     transaction(db, () => {
-      sql.markInspected.run(Date.now(), id);
-      sql.restockItem.run(rental.quantity, rental.item_id);
+      sql.resolveDesk.run(inBasket ? 1 : 0, now, reason, id);
+      if (rental && inBasket) {
+        sql.restockItem.run(req.quantity, req.item_id);
+      } else if (rental) {
+        const status = req.item_kind === 'consumable' ? RentalStatus.CONSUMED : RentalStatus.ACTIVE;
+        rentalId = Number(
+          sql.insertRental.run(req.user_id, req.item_id, req.quantity, req.zone_id, req.seat, status, now).lastInsertRowid,
+        );
+        sql.linkRental.run(rentalId, id);
+      } else if (inBasket) {
+        if (checking) sql.markReturned.run(now, req.rental_id);
+        sql.markInspected.run(now, req.rental_id);
+        sql.restockItem.run(req.quantity, req.item_id);
+      } else {
+        sql.setRentalStatus.run(RentalStatus.ACTIVE, req.rental_id);
+      }
     });
-    emitRental(id);
-    emitItems();
-    return sql.rental.get(id);
+    emitRequest(id);
+    if (inBasket) emitItems();
+    if (rentalId) emitRental(rentalId);
+    return sql.request.get(id);
   }
 
   function setStock(itemId, stock) {
@@ -266,6 +314,7 @@ export function createRentalService(db, bus) {
     openRequests: () => sql.openRequests.all(),
     nextQueued: () => sql.nextQueued.get(),
     dispatched: () => sql.dispatched.get(),
+    nextDeskTask: () => sql.nextDeskTask.get(),
     getRequest,
     getOwnedRequest,
     createRentalRequest,
@@ -274,7 +323,7 @@ export function createRentalService(db, bus) {
     markDispatched,
     matchesCode,
     listRentals,
-    inspectRental,
+    resolveDesk,
     setStock,
   };
 }

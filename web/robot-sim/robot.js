@@ -75,10 +75,12 @@ function sendPosition() {
 const round = (n) => Math.round(n * 100) / 100;
 
 // ── 상태 ─────────────────────────────
-// TEMI 화면: 대기 · 출발 대기(출발 버튼) · 이동 중(터치 없음, 지도) · 도착(QR 인증, 예비 PIN) · 인증 완료(수령 확인)
+// TEMI 화면: 대기 · 출발 대기(출발 버튼) · 이동 중(터치 없음, 지도) · 도착(대여만 QR 인증, 예비 PIN)
+//          · 완료 대기(대여 완료 / 반납 완료) · 데스크(회수 완료 / 물건 있음·없음)
 const sim = {
-  screen: 'idle', // idle | ready | moving | arrived | pin | verified
+  screen: 'idle', // idle | ready | moving | arrived | pin | confirm | desk
   task: null, // 서버에서 받은 goTo 내용. 홈베이스로 복귀 중이면 null
+  desk: null, // 서버에서 받은 desk 내용
   pin: '',
 };
 
@@ -115,15 +117,16 @@ function send(msg, { quiet = false } = {}) {
 
 function robotState() {
   if (sim.screen === 'moving') return sim.task ? 'moving' : 'returning';
-  return { ready: 'ready', arrived: 'arrived', pin: 'arrived', verified: 'arrived' }[sim.screen] ?? 'idle';
+  return { ready: 'ready', desk: 'desk', arrived: 'arrived', pin: 'arrived', confirm: 'arrived' }[sim.screen] ?? 'idle';
 }
 
 // ── 서버 메시지 처리 ─────────────────────────────
 const handlers = {
-  // 첫 시도는 데스크에서 물품을 담고 출발 버튼을 눌러야 출발한다. 재시도는 바로 다시 이동한다.
+  // 첫 시도는 데스크에서 물품을 담고 출발 버튼을 눌러야 출발한다.
+  // 재시도와 회수·싣기 완료 버튼으로 온 요청(immediate)은 바로 이동한다.
   goTo(msg) {
     sim.task = msg;
-    if (msg.attempt > 1) return startMove(msg);
+    if (msg.attempt > 1 || msg.immediate) return startMove(msg);
     setScreen('ready');
     send({ type: 'status', requestId: msg.requestId, state: 'ready' });
   },
@@ -139,11 +142,22 @@ const handlers = {
       onAbort: () => send({ type: 'status', state: 'idle' }),
     });
   },
+  // 데스크로 돌아오면 회수나 바구니 확인을 받는다
+  desk(msg) {
+    sim.desk = msg;
+    setScreen('desk');
+    send({ type: 'status', state: 'desk' });
+  },
+  deskDone() {
+    if (sim.screen !== 'desk') return; // 버튼을 두 번 눌렀을 때 온 답은 무시한다 (이미 출발했을 수 있다)
+    sim.desk = null;
+    setScreen('idle');
+    send({ type: 'status', state: 'idle' });
+  },
   verifyResult(msg) {
     if (msg.ok) {
-      setScreen('verified');
-      const rental = sim.task?.requestType === 'rental';
-      driver.speak(rental ? '인증되었습니다. 바구니에서 물품을 꺼내 주세요.' : '인증되었습니다. 바구니에 물품을 넣어 주세요.');
+      setScreen('confirm');
+      driver.speak('인증되었습니다. 바구니에서 물품을 꺼내 주세요.');
     } else {
       sim.pin = '';
       if (sim.screen === 'pin') render();
@@ -168,7 +182,7 @@ const handlers = {
     sim.task = msg;
     if (msg.status === 'preparing') setScreen('ready');
     else if (msg.status === 'moving') startMove(msg);
-    else setScreen(msg.status === 'verified' ? 'verified' : 'arrived');
+    else setScreen(msg.status === 'verified' || msg.requestType === 'return' ? 'confirm' : 'arrived');
   },
 };
 
@@ -177,9 +191,10 @@ function startMove(task) {
   send({ type: 'status', requestId: task.requestId, state: 'moving' });
   driver.goTo(task.location, task.simTravelSec ?? 8, {
     onComplete: () => {
-      setScreen('arrived');
+      const rental = task.requestType === 'rental';
+      setScreen(rental ? 'arrived' : 'confirm'); // QR 인증은 물품을 받는 대여 학생만 한다
       send({ type: 'status', requestId: task.requestId, state: 'arrived' });
-      driver.speak(`${task.seat}번 좌석에 도착했습니다. 앱의 QR 코드를 보여 주세요.`);
+      driver.speak(`${task.seat}번 좌석에 도착했습니다. ${rental ? '앱의 QR 코드를 보여 주세요.' : '바구니에 물품을 넣어 주세요.'}`);
     },
     onAbort: (detail) => {
       send({ type: 'status', requestId: task.requestId, state: 'failed', detail });
@@ -196,12 +211,44 @@ function setScreen(screen) {
 
 const chip = (text, cls = '') => `<span class="t-chip ${cls}">${esc(text)}</span>`;
 const kv = (k, v) => `<div class="t-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+const itemOf = (t) => `${t.itemName} · ${t.quantity}개`;
+
+// 회수 화면 버튼: 다음 요청이 있으면 이 버튼 하나로 바로 출발한다
+const collectLabel = (next) => (!next ? '회수 완료' : next.requestType === 'rental' ? '회수·싣기 완료' : '회수 완료 · 출발');
+
+function deskView(d) {
+  const rental = d.requestType === 'rental';
+  if (d.mode === 'check') {
+    return `
+      <div class="t-center">
+        ${chip('바구니 확인')}
+        <h1 class="t-title">바구니를 확인해 주세요</h1>
+        <p class="t-lead">${rental ? '학생이 대여 완료를 누르지 않았어요. 바구니에 물건이 있나요?' : '학생이 반납 완료를 누르지 않았어요. 바구니에 물건이 있나요?'}</p>
+        <div class="t-card narrow">${kv(`${d.seat}번 좌석`, itemOf(d))}</div>
+        <div class="t-pair">
+          <button class="t-btn huge" data-key="found">물건 있음</button>
+          <button class="t-btn huge ghost" data-key="missing">물건 없음</button>
+        </div>
+      </div>`;
+  }
+  const next = d.next;
+  return `
+    <div class="t-center">
+      ${chip(rental ? '바구니 회수 · 전달하지 못함' : '반납 회수')}
+      <h1 class="t-title">바구니의 물품을 회수해 주세요</h1>
+      <div class="t-card narrow">
+        ${kv('회수할 물품', itemOf(d))}
+        ${next ? kv(`다음 · ${next.seat}번 좌석`, `${next.requestType === 'rental' ? '담을 물품' : '받을 물품'}: ${itemOf(next)}`) : ''}
+      </div>
+      <button class="t-btn huge" data-key="collected">${collectLabel(next)}</button>
+    </div>`;
+}
 
 function render() {
   const t = sim.task;
   const rental = t?.requestType === 'rental';
   const kind = rental ? '대여' : '반납';
-  const item = t ? `${t.itemName} · ${t.quantity}개` : '';
+  const item = t ? itemOf(t) : '';
   const zone = t ? `${t.area ?? ''} ${t.zoneName ?? ''}`.trim() : '';
   const views = {
     idle: () => `
@@ -214,16 +261,11 @@ function render() {
         <div class="t-art">${illustration('temi')}</div>
       </div>`,
     ready: () => `
-      <div class="t-split">
-        <div class="t-col">
-          ${chip(`${kind} · 출발 준비`)}
-          <h1 class="t-title big">${esc(t.seat)}번 좌석</h1>
-          <div class="t-card">${kv(rental ? '담을 물품' : '받을 물품', item)}${kv('구역', zone)}</div>
-        </div>
-        <div class="t-col">
-          <div class="t-notice">${rental ? '바구니에 물품을 담은 뒤\n출발을 눌러 주세요' : '준비되면 출발을 눌러 주세요'}</div>
-          <button class="t-btn" data-key="depart">출발</button>
-        </div>
+      <div class="t-center">
+        ${chip(`${kind} · 출발 준비`)}
+        <h1 class="t-title big">${esc(t.seat)}번 좌석</h1>
+        <div class="t-card narrow">${kv(rental ? '담을 물품' : '받을 물품', item)}${kv('구역', zone)}</div>
+        <button class="t-btn huge" data-key="depart">${rental ? '물건 싣기 완료' : '출발'}</button>
       </div>`,
     // 이동 중에는 터치를 받지 않는다. 지도에 현재 위치를 보여 준다
     moving: () => `
@@ -260,19 +302,14 @@ function render() {
           <button data-key="clear" class="sub" aria-label="지우기">⌫</button>
         </div>
       </div>`,
-    verified: () => `
-      <div class="t-split">
-        <div class="t-col">
-          ${chip('인증 완료')}
-          <h1 class="t-title">${rental ? '바구니에서<br />물품을 꺼내 주세요' : '바구니에<br />물품을 넣어 주세요'}</h1>
-          <div class="t-card">${kv(rental ? '받을 물품' : '돌려줄 물품', item)}
-            <div class="t-warn">${rental ? "확인을 눌러야 '대여 중'이 돼요" : '관리자 검수 후 반납이 완료돼요'}</div>
-          </div>
-        </div>
-        <div class="t-col">
-          <button class="t-btn" data-key="complete">${rental ? '수령 확인' : '반납 확인'}</button>
-        </div>
+    confirm: () => `
+      <div class="t-center">
+        ${chip(rental ? '인증 완료' : '도착 · 반납')}
+        <h1 class="t-title">${rental ? '바구니에서 물품을 꺼내 주세요' : '바구니에 물품을 넣어 주세요'}</h1>
+        <div class="t-card narrow">${kv(rental ? '받을 물품' : '돌려줄 물품', item)}</div>
+        <button class="t-btn huge" data-key="complete">${!rental ? '반납 완료' : t.itemKind === 'consumable' ? '수령 완료' : '대여 완료'}</button>
       </div>`,
+    desk: () => deskView(sim.desk),
   };
   const screen = $('#screen');
   screen.dataset.state = sim.screen;
@@ -321,9 +358,17 @@ function log(kind, msg) {
 // ── 입력 ─────────────────────────────
 $('#screen').addEventListener('click', (e) => {
   const key = e.target.closest('[data-key]')?.dataset.key;
-  if (!key || !sim.task) return;
+  if (!key) return;
+  if (sim.screen === 'desk') {
+    const d = sim.desk;
+    if (key === 'collected') send({ type: 'collected', requestId: d.requestId, nextRequestId: d.next?.requestId });
+    if (key === 'found') send({ type: 'collected', requestId: d.requestId, found: true });
+    if (key === 'missing') send({ type: 'collected', requestId: d.requestId, found: false });
+    return;
+  }
+  if (!sim.task) return;
   if (key === 'depart' && sim.screen === 'ready') return startMove(sim.task); // 출발 버튼
-  if (key === 'complete' && sim.screen === 'verified') return send({ type: 'complete', requestId: sim.task.requestId });
+  if (key === 'complete' && sim.screen === 'confirm') return send({ type: 'complete', requestId: sim.task.requestId });
   if (key === 'pin' && sim.screen === 'arrived') {
     sim.pin = '';
     return setScreen('pin');

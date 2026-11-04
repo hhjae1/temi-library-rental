@@ -46,13 +46,13 @@ export function createApi({ service, dispatcher, robot, config }) {
 
   api.get('/requests', wrap((req) => service.listRequests({ userId: userIdOf(req.query.userId) })));
 
-  // 본인 요청 상세. 로봇에 배정된 뒤부터 도착까지 인증용 QR을 함께 준다 (PIN은 개발용 예비).
+  // 본인 요청 상세. 대여는 로봇에 배정된 뒤부터 도착까지 인증용 QR과 예비 PIN을 함께 준다. 반납은 인증하지 않는다.
   api.get(
     '/requests/:id',
     wrap(async (req) => {
       const row = service.getOwnedRequest(idOf(req.params.id), userIdOf(req.query.userId));
       const out = service.toPublic(row);
-      if ([S.PREPARING, S.MOVING, S.ARRIVED].includes(row.status)) {
+      if (row.type === 'rental' && [S.PREPARING, S.MOVING, S.ARRIVED].includes(row.status)) {
         const payload = qrPayload(row.qr_token);
         out.auth = { payload, pin: row.pin, qrDataUrl: await QRCode.toDataURL(payload, { margin: 1, width: 320 }) };
       }
@@ -95,7 +95,6 @@ export function createApi({ service, dispatcher, robot, config }) {
   // ── 관리자 ── TODO: 관리자 인증
   api.get('/admin/requests', wrap(() => service.listRequests()));
   api.put('/admin/items/:id', wrap((req) => service.setStock(idOf(req.params.id), req.body?.stock)));
-  api.post('/admin/rentals/:id/inspect', wrap((req) => service.inspectRental(idOf(req.params.id))));
 
   api.use((err, req, res, next) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });

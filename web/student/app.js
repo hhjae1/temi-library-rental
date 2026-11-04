@@ -28,6 +28,7 @@ const ROBOT_LABEL = {
   offline: 'temi 연결 끊김',
   idle: 'temi 대기 중',
   ready: 'temi 출발 준비 중',
+  desk: 'temi 데스크 확인 중',
   moving: 'temi 이동 중',
   arrived: 'temi 도착',
   returning: 'temi 복귀 중',
@@ -49,7 +50,7 @@ const STATUS_CHIP = {
 const RENTAL_CHIP = {
   active: ['대여 중', ''],
   returning: ['반납 진행 중', 'warm'],
-  returned: ['검수 대기', 'line'],
+  returned: ['회수 대기', 'line'],
 };
 
 const hhmm = (ms) =>
@@ -103,7 +104,7 @@ function notifyChange(before) {
   const now = state.requests.find((r) => r.id === before.id);
   if (!now || now.status === before.status) return;
   if (now.status === 'arrived') {
-    toast('temi가 도착했어요! QR 코드를 temi 카메라에 보여주세요.');
+    toast(now.type === 'rental' ? 'temi가 도착했어요! QR 코드를 temi 카메라에 보여주세요.' : 'temi가 도착했어요! 바구니에 물품을 넣어주세요.');
     navigator.vibrate?.(200);
   } else if (now.status === 'failed' || now.status === 'expired') {
     toast(`요청이 끝났어요 · ${now.fail_reason ?? ''}`, 'error');
@@ -399,9 +400,9 @@ function viewDelivery(r) {
       lead: '좌석 근처에 도착하면 알려드릴게요.\n도착하면 앱의 QR 코드를 temi 카메라에 보여주세요.',
     },
     arrived: {
-      chip: '도착 · QR 인증 대기',
+      chip: isRental ? '도착 · QR 인증 대기' : '도착 · 반납 대기',
       title: 'temi가 도착했어요',
-      lead: '아래 QR 코드를 temi 카메라에 보여주세요.',
+      lead: isRental ? '아래 QR 코드를 temi 카메라에 보여주세요.' : '바구니에 물품을 넣고 반납 완료를 눌러주세요.\ntemi 화면에서 눌러도 돼요.',
     },
     verified: {
       chip: isRental ? '도착 · 수령 대기' : '도착 · 반납 대기',
@@ -443,7 +444,9 @@ function viewDelivery(r) {
     queued: `<button class="btn ghost danger" data-action="cancel" data-id="${r.id}">요청 취소</button>`,
     preparing: `<button class="btn ghost danger" data-action="cancel" data-id="${r.id}">요청 취소</button>`,
     moving: `<button class="btn ghost danger" data-action="cancel" data-id="${r.id}">요청 취소</button>`,
-    arrived: `<button class="btn" disabled>temi에서 QR 인증하면 ${isRental ? '수령' : '반납'}할 수 있어요</button>`,
+    arrived: isRental
+      ? '<button class="btn" disabled>temi에서 QR 인증하면 수령할 수 있어요</button>'
+      : `<button class="btn" data-action="complete" data-id="${r.id}">반납을 완료했어요</button>`,
     verified: `<button class="btn" data-action="complete" data-id="${r.id}">${isRental ? '물품을 받았어요' : '반납을 완료했어요'}</button>`,
   }[r.status];
 
@@ -480,7 +483,7 @@ function viewDelivery(r) {
       <section class="card summary">
         <div class="kv"><span>${isRental ? '받을 물품' : '돌려줄 물품'}</span><b>${esc(itemLabel(r))} · ${r.quantity}개</b></div>
         <div class="divider"></div>
-        <div class="warn-line">${icon('hand', 'sm')} ${isRental ? "수령 확인 전에는 '대여 중'이 아니에요." : '관리자 검수가 끝나야 반납이 완료돼요.'}</div>
+        <div class="warn-line">${icon('hand', 'sm')} ${isRental ? "수령 확인 전에는 '대여 중'이 아니에요." : '데스크에서 회수하면 반납이 끝나요.'}</div>
       </section>
 
       ${auth}
@@ -524,7 +527,7 @@ function viewRentals() {
           <div class="divider"></div>
           <div class="kv"><span>수령 장소</span><b>${t.seat ? esc(seatLabel(t.seat)) : '-'}</b></div>
           <div class="ok-line">${icon('checkCircle', 'sm')} ${
-            t.status === 'returned' ? '반납이 접수됐어요. 관리자 검수를 기다리고 있어요.' : '수령 확인이 완료되어 대여가 시작됐어요.'
+            t.status === 'returned' ? '반납이 접수됐어요. 데스크에서 회수하면 끝나요.' : '수령 확인이 완료되어 대여가 시작됐어요.'
           }</div>
         </section>`;
       if (t.status !== 'active') return card;
@@ -601,7 +604,7 @@ function viewGuide() {
           <li>대여 데스크에서 물품을 싣고 temi가 출발해요.</li>
           <li>temi가 도착하면 앱의 QR 코드를 temi 카메라에 보여줘요. QR이 안 되면 앱의 PIN을 temi 화면에 입력해요.</li>
           <li>바구니에서 물품을 꺼내고 '물품을 받았어요'를 눌러요.</li>
-          <li>다 쓰면 대여 현황에서 반납을 요청해요.</li>
+          <li>다 쓰면 대여 현황에서 반납을 요청해요. temi가 오면 바구니에 넣고 반납 완료를 눌러요.</li>
         </ol>
       </section>
       <div class="notice">${icon('info')}<span>도서관에서는 temi 음성 안내를 작게 사용해요.\n화면 안내를 함께 확인해주세요.</span></div>

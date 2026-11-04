@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 // 스키마가 바뀌면 올린다. 버전이 다르면 개발용 DB를 새로 만든다 (프로토타입 단계).
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 -- 홈 화면에 보이는 물품 묶음 (충전기, 담요 ...)
@@ -76,7 +76,10 @@ CREATE TABLE IF NOT EXISTS requests (
   departed_at        INTEGER,           -- TEMI 화면에서 출발 버튼을 누른 시각
   arrived_at         INTEGER,
   updated_at         INTEGER NOT NULL,
-  status_changed_at  INTEGER NOT NULL
+  status_changed_at  INTEGER NOT NULL,
+  desk_state         TEXT,              -- 끝난 뒤 데스크 처리: collect(회수) / check(바구니 확인) / done / 없으면 NULL
+  desk_found         INTEGER,           -- 바구니에 물건이 있었는지 (1/0)
+  desk_resolved_at   INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS requests_status ON requests(status);

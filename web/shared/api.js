@@ -42,7 +42,7 @@ export const REQUEST_TYPE_LABEL = { rental: '대여', return: '반납' };
 export const RENTAL_STATUS_LABEL = {
   active: '대여 중',
   returning: '반납 진행 중',
-  returned: '검수 대기',
+  returned: '회수 대기',
   inspected: '반납 완료',
   consumed: '소모품',
 };
@@ -51,6 +51,7 @@ export const ROBOT_STATE_LABEL = {
   offline: '로봇 연결 끊김',
   idle: '로봇 대기 중',
   ready: '로봇 출발 준비',
+  desk: '로봇 데스크 확인 대기',
   moving: '로봇 이동 중',
   arrived: '로봇 도착',
   returning: '로봇 복귀 중',

@@ -6,7 +6,7 @@ TEMI 태블릿에 뜨는 화면과 TEMI 이동 제어를 맡는다. 서버와는
 | 파일 | 하는 일 |
 |---|---|
 | `app/src/main/java/.../RobotBridge.kt` | 서버 프로토콜 ↔ temi SDK (`goTo`, 이동 상태 콜백, 음성 안내), 재연결 |
-| `app/src/main/java/.../MainActivity.kt` | TEMI 화면: 대기 · 출발 준비(출발 버튼) · 이동 중 · 도착(카메라 QR / PIN) · 인증 완료 |
+| `app/src/main/java/.../MainActivity.kt` | TEMI 화면: 대기 · 출발 준비 · 이동 중 · 도착(대여만 카메라 QR / PIN) · 완료(대여 완료 / 반납 완료) · 데스크(회수 완료 / 물건 있음·없음) |
 
 - TEMI는 Android 6.0(SDK 23)이라 `minSdk = 23`이다.
 - temi SDK `1.138.0`, QR 인식은 `zxing-android-embedded 4.3.0` + `zxing core 3.3.0` (Android 7 미만 호환용).
@@ -43,7 +43,7 @@ adb shell am start -n kr.ac.kw.temirental/.MainActivity
 
 ## 현장에서 맞출 것
 
-- [ ] TEMI 맵에 위치 저장: 서버 `zones.temi_location`(`humanities-a`, `humanities-b`, `humanities-c`)과 같은 이름으로. 홈베이스는 `home base`
+- [ ] TEMI 맵에 위치 저장: 서버 `zones.temi_location`(`humanities-a`, `humanities-b`, `humanities-c`)과 같은 이름으로. 데스크는 지금 홈베이스(`home base`)로 쓴다
       맵에 없는 위치로 보내면 앱이 이동하지 않고 실패로 보고한다.
 - [ ] 서버를 돌리는 PC와 TEMI가 같은 Wi-Fi(핫스팟)에 있고, PC 방화벽이 3000번 포트를 막지 않는지
 - [ ] 카메라 QR 인식이 실제로 되는지 (안 되면 PIN 입력 사용)

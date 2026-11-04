@@ -172,7 +172,8 @@ class MainActivity : Activity(), RobotBridge.Ui, OnRobotReadyListener {
             Screen.MOVING, Screen.RETURNING -> movingView(if (screen == Screen.RETURNING) null else task)
             Screen.ARRIVED -> arrivedView(task!!)
             Screen.PIN -> pinView(task!!)
-            Screen.VERIFIED -> verifiedView(task!!)
+            Screen.CONFIRM -> confirmView(task!!)
+            Screen.DESK -> deskView(bridge.desk!!)
         }
         content.addView(view, FrameLayout.LayoutParams(MATCH, MATCH))
     }
@@ -191,16 +192,11 @@ class MainActivity : Activity(), RobotBridge.Ui, OnRobotReadyListener {
         },
     )
 
-    private fun readyView(t: RobotBridge.Task) = split(
-        column(
-            chip("${kind(t)} · 출발 준비"),
-            title("${t.seat}번 좌석", size = 64f, color = GREEN),
-            card(kv(if (t.rental) "담을 물품" else "받을 물품", item(t)), kv("구역", t.zone)),
-        ),
-        column(
-            notice(if (t.rental) "바구니에 물품을 담은 뒤\n출발을 눌러 주세요" else "준비되면 출발을 눌러 주세요"),
-            bigButton("출발") { bridge.depart() },
-        ),
+    private fun readyView(t: RobotBridge.Task) = centered(
+        chip("${kind(t)} · 출발 준비"),
+        title("${t.seat}번 좌석", size = 64f, color = GREEN).center(),
+        card(kv(if (t.rental) "담을 물품" else "받을 물품", item(t)), kv("구역", t.zone)),
+        hugeButton(if (t.rental) "물건 싣기 완료" else "출발") { bridge.depart() },
     )
 
     // 이동 중에는 터치를 받지 않는다. 맵이 있으면 지도에 현재 위치를 보여 준다
@@ -275,19 +271,41 @@ class MainActivity : Activity(), RobotBridge.Ui, OnRobotReadyListener {
         )
     }
 
-    private fun verifiedView(t: RobotBridge.Task) = split(
-        column(
-            chip("인증 완료"),
-            title(if (t.rental) "바구니에서\n물품을 꺼내 주세요" else "바구니에\n물품을 넣어 주세요"),
-            card(
-                kv(if (t.rental) "받을 물품" else "돌려줄 물품", item(t)),
-                text(if (t.rental) "확인을 눌러야 '대여 중'이 돼요" else "관리자 검수 후 반납이 완료돼요", 18f, BROWN, bold = true).apply {
-                    gravity = Gravity.START
-                },
-            ),
-        ),
-        column(bigButton(if (t.rental) "수령 확인" else "반납 확인") { bridge.complete() }),
+    // 대여는 QR 인증 뒤, 반납은 도착하면 바로 나온다. 누르면 데스크로 돌아간다
+    private fun confirmView(t: RobotBridge.Task) = centered(
+        chip(if (t.rental) "인증 완료" else "도착 · 반납"),
+        title(if (t.rental) "바구니에서 물품을 꺼내 주세요" else "바구니에 물품을 넣어 주세요").center(),
+        card(kv(if (t.rental) "받을 물품" else "돌려줄 물품", item(t))),
+        hugeButton(if (!t.rental) "반납 완료" else if (t.consumable) "수령 완료" else "대여 완료") { bridge.complete() },
     )
+
+    // 데스크: 바구니에 물건이 있으면 회수 완료, 있는지 모르면(시간 초과) 관리자가 보고 고른다
+    private fun deskView(d: RobotBridge.DeskTask): View {
+        val t = d.task
+        if (d.check) {
+            return centered(
+                chip("바구니 확인"),
+                title("바구니를 확인해 주세요").center(),
+                lead("학생이 ${if (t.rental) "대여" else "반납"} 완료를 누르지 않았어요. 바구니에 물건이 있나요?").center(),
+                card(kv("${t.seat}번 좌석", item(t))),
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    tag = STRETCH
+                    addView(hugeButton("물건 있음") { bridge.collected(found = true) }, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = dp(12) })
+                    addView(hugeButton("물건 없음", filled = false) { bridge.collected(found = false) }, LinearLayout.LayoutParams(0, WRAP, 1f).apply { leftMargin = dp(12) })
+                },
+            )
+        }
+        val next = d.next
+        val rows = mutableListOf(kv("회수할 물품", item(t)))
+        if (next != null) rows += kv("다음 · ${next.seat}번 좌석", "${if (next.rental) "담을 물품" else "받을 물품"}: ${item(next)}")
+        return centered(
+            chip(if (t.rental) "바구니 회수 · 전달하지 못함" else "반납 회수"),
+            title("바구니의 물품을 회수해 주세요").center(),
+            card(*rows.toTypedArray()),
+            hugeButton(if (next == null) "회수 완료" else if (next.rental) "회수·싣기 완료" else "회수 완료 · 출발") { bridge.collected() },
+        )
+    }
 
     private fun kind(t: RobotBridge.Task) = if (t.rental) "대여" else "반납"
     private fun item(t: RobotBridge.Task) = "${t.itemName} · ${t.quantity}개"
@@ -365,6 +383,18 @@ class MainActivity : Activity(), RobotBridge.Ui, OnRobotReadyListener {
         addView(right, LinearLayout.LayoutParams(0, WRAP, 1f))
     }
 
+    /** 출발·완료·회수 화면: 모두 가운데에 놓고, 버튼을 크게 */
+    private fun centered(vararg views: View) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setPadding(dp(48), 0, dp(48), dp(48))
+        views.forEachIndexed { i, v ->
+            addView(v, LinearLayout.LayoutParams(if (v.tag == STRETCH) dp(CENTER_WIDTH) else WRAP, WRAP).apply { if (i > 0) topMargin = dp(20) })
+        }
+    }
+
+    private fun TextView.center() = apply { gravity = Gravity.CENTER }
+
     private fun column(vararg views: View) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         views.forEachIndexed { i, v ->
@@ -411,22 +441,18 @@ class MainActivity : Activity(), RobotBridge.Ui, OnRobotReadyListener {
         addView(text(value, 20f, TEXT, bold = true).apply { gravity = Gravity.END })
     }
 
-    private fun notice(value: String) = text(value, 24f, WARM_TEXT, bold = true).apply {
-        gravity = Gravity.START
-        background = rounded(WARM, dp(20))
-        setPadding(dp(28), dp(24), dp(28), dp(24))
-        setLineSpacing(0f, 1.3f)
-        tag = STRETCH
-    }
-
-    // 서서 누르는 버튼이라 크게 (화면 높이의 12%)
-    private fun bigButton(label: String, onClick: () -> Unit) = Button(this).apply {
+    // 서서 누르는 버튼이라 아주 크게 (화면 높이의 20%)
+    private fun hugeButton(label: String, filled: Boolean = true, onClick: () -> Unit) = Button(this).apply {
         text = label
-        setTextColor(Color.WHITE)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+        setTextColor(if (filled) Color.WHITE else GREEN)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 40f)
         typeface = Typeface.DEFAULT_BOLD
-        background = rounded(GREEN, dp(18))
-        minHeight = dp(96)
+        background = GradientDrawable().apply {
+            setColor(if (filled) GREEN else SURFACE)
+            cornerRadius = dp(24).toFloat()
+            if (!filled) setStroke(dp(3), GREEN)
+        }
+        minHeight = dp(160)
         stateListAnimator = null
         tag = STRETCH
         setOnClickListener { onClick() }
@@ -503,6 +529,7 @@ class MainActivity : Activity(), RobotBridge.Ui, OnRobotReadyListener {
         private const val REQ_CAMERA = 1
         private const val SCAN_COOLDOWN_MS = 2_500L
         private const val TOP_INSET = 80 // temi 시스템 상단 바 (실기 화면에서 약 65dp)
+        private const val CENTER_WIDTH = 820 // 가운데 카드·버튼 폭 (화면 폭 1280dp의 약 64%)
         private const val STRETCH = "stretch"
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -514,9 +541,6 @@ class MainActivity : Activity(), RobotBridge.Ui, OnRobotReadyListener {
         private val MUTED = Color.parseColor("#858D89")
         private val GREEN = Color.parseColor("#2D6E62")
         private val MINT = Color.parseColor("#E5F0EB")
-        private val WARM = Color.parseColor("#F3EEE3")
-        private val WARM_TEXT = Color.parseColor("#7F6440")
-        private val BROWN = Color.parseColor("#A0642B")
         private val DANGER = Color.parseColor("#C0392B")
         private val DANGER_SOFT = Color.parseColor("#FBE9E6")
     }

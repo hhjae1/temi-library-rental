@@ -327,3 +327,36 @@
 
 .log li.in { color: var(--info); }
 .log li.out { color: var(--primary); }
+
+/* 출발·완료·회수 화면: 가운데 정렬, 아주 큰 버튼 (실제 TEMI 앱과 같은 비율) */
+.t-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2.4cqh;
+  width: 100%;
+  height: 100%;
+  text-align: center;
+}
+
+.t-card.narrow {
+  width: 62%;
+}
+
+.t-btn.huge {
+  width: 62%;
+  min-height: 19cqh;
+  font-size: 5.2cqh;
+}
+
+.t-pair {
+  display: flex;
+  gap: 3cqh;
+  width: 100%;
+  justify-content: center;
+}
+
+.t-pair .t-btn.huge {
+  width: 38%;
+}

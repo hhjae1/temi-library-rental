@@ -22,18 +22,20 @@ import java.util.concurrent.TimeUnit
 /**
  * 서버 프로토콜(docs/robot-protocol.md)과 temi SDK를 잇는다.
  * 흐름은 브라우저 시뮬레이터(web/robot-sim/robot.js)와 같다:
- * 대기 → goTo(출발 준비, 출발 버튼) → 이동 → 도착(QR/PIN 인증) → 인증 완료(수령·반납 확인) → 홈베이스 복귀
+ * 대기 → goTo(출발 준비, 출발 버튼) → 이동 → 도착(대여만 QR/PIN 인증) → 완료 버튼(대여 완료·반납 완료) → 홈베이스 복귀
+ * → 데스크 처리(회수 완료 또는 물건 있음·없음)가 있으면 받고 다음 요청으로
  */
 class RobotBridge(private val ui: Ui) :
     OnGoToLocationStatusChangedListener,
     OnCurrentPositionChangedListener,
     OnRequestPermissionResultListener {
 
-    enum class Screen { IDLE, READY, MOVING, RETURNING, ARRIVED, PIN, VERIFIED }
+    enum class Screen { IDLE, READY, MOVING, RETURNING, ARRIVED, PIN, CONFIRM, DESK }
 
     data class Task(
         val requestId: Int,
         val rental: Boolean,
+        val consumable: Boolean, // 돌려주지 않는 물품 (물티슈 등)
         val itemName: String,
         val quantity: Int,
         val seat: String,
@@ -45,12 +47,24 @@ class RobotBridge(private val ui: Ui) :
             fun from(m: JSONObject) = Task(
                 requestId = m.getInt("requestId"),
                 rental = m.optString("requestType") == "rental",
+                consumable = m.optString("itemKind") == "consumable",
                 itemName = m.optString("itemName"),
                 quantity = m.optInt("quantity", 1),
                 seat = m.optString("seat"),
                 zone = listOf(m.optString("area"), m.optString("zoneName")).filter { it.isNotBlank() }.joinToString(" "),
                 location = m.optString("location"),
                 attempt = m.optInt("attempt", 1),
+            )
+        }
+    }
+
+    /** 데스크에서 받을 처리. check면 바구니를 보고 물건 있음·없음을 고르고, 아니면 회수 완료. next가 있으면 버튼 하나로 바로 출발한다 */
+    data class DeskTask(val task: Task, val check: Boolean, val next: Task?) {
+        companion object {
+            fun from(m: JSONObject) = DeskTask(
+                task = Task.from(m),
+                check = m.optString("mode") == "check",
+                next = m.optJSONObject("next")?.let { Task.from(it) },
             )
         }
     }
@@ -75,6 +89,9 @@ class RobotBridge(private val ui: Ui) :
         private set
     var task: Task? = null
         private set
+    var desk: DeskTask? = null
+        private set
+    private var deskSent = false // 데스크 버튼은 한 번만 보낸다
     private var target: String? = null // goTo로 가는 중인 TEMI 위치 이름
     private var homeRetries = 0
     private var mapMessage: String? = null // 접속할 때마다 다시 보낸다
@@ -218,9 +235,10 @@ class RobotBridge(private val ui: Ui) :
 
     private fun robotState() = when (screen) {
         Screen.READY -> "ready"
+        Screen.DESK -> "desk"
         Screen.MOVING -> "moving"
         Screen.RETURNING -> "returning"
-        Screen.ARRIVED, Screen.PIN, Screen.VERIFIED -> "arrived"
+        Screen.ARRIVED, Screen.PIN, Screen.CONFIRM -> "arrived"
         Screen.IDLE -> "idle"
     }
 
@@ -233,10 +251,11 @@ class RobotBridge(private val ui: Ui) :
 
     private fun handle(msg: JSONObject) {
         when (msg.optString("type")) {
-            // 첫 시도는 데스크에서 물품을 담고 출발 버튼을 눌러야 출발한다. 이동 실패 후 재시도는 바로 다시 이동한다.
+            // 첫 시도는 데스크에서 물품을 담고 출발 버튼을 눌러야 출발한다.
+            // 이동 실패 후 재시도와, 회수·싣기 완료 버튼으로 온 요청(immediate)은 바로 이동한다.
             "goTo" -> {
                 task = Task.from(msg)
-                if (task!!.attempt > 1) {
+                if (task!!.attempt > 1 || msg.optBoolean("immediate")) {
                     startMove()
                 } else {
                     setScreen(Screen.READY)
@@ -244,9 +263,23 @@ class RobotBridge(private val ui: Ui) :
                 }
             }
             "goHome" -> goHome(msg.optString("location", HOME))
+            // 데스크로 돌아오면 회수나 바구니 확인을 받는다. 다음 요청이 새로 들어오면 다시 온다.
+            "desk" -> {
+                task = null
+                desk = DeskTask.from(msg)
+                deskSent = false
+                setScreen(Screen.DESK)
+                report("desk")
+            }
+            // 버튼을 두 번 눌렀을 때 온 답은 무시한다 (이미 출발했을 수 있다)
+            "deskDone" -> if (screen == Screen.DESK) {
+                desk = null
+                setScreen(Screen.IDLE)
+                report("idle")
+            }
             "verifyResult" -> if (msg.optBoolean("ok")) {
-                setScreen(Screen.VERIFIED)
-                speak(if (task?.rental == true) "인증되었습니다. 바구니에서 물품을 꺼내 주세요." else "인증되었습니다. 바구니에 물품을 넣어 주세요.")
+                setScreen(Screen.CONFIRM)
+                speak("인증되었습니다. 바구니에서 물품을 꺼내 주세요.")
             } else {
                 ui.banner(msg.optString("reason", "인증 실패"), true)
                 setScreen(screen) // PIN 패드를 비우고 QR 인식을 다시 시작한다
@@ -272,8 +305,8 @@ class RobotBridge(private val ui: Ui) :
                 when (msg.optString("status")) {
                     "preparing" -> setScreen(Screen.READY)
                     "moving" -> startMove()
-                    "verified" -> setScreen(Screen.VERIFIED)
-                    else -> setScreen(Screen.ARRIVED)
+                    "verified" -> setScreen(Screen.CONFIRM)
+                    else -> setScreen(if (task!!.rental) Screen.ARRIVED else Screen.CONFIRM)
                 }
             }
         }
@@ -292,10 +325,21 @@ class RobotBridge(private val ui: Ui) :
         send(JSONObject().put("type", "verify").put("requestId", t.requestId).put("code", code))
     }
 
-    /** 수령·반납 확인 버튼 */
+    /** 대여 완료·반납 완료 버튼 */
     fun complete() {
         val t = task ?: return
         send(JSONObject().put("type", "complete").put("requestId", t.requestId))
+    }
+
+    /** 데스크 버튼. found는 바구니 확인 화면에서 고른 값 (회수 완료면 null) */
+    fun collected(found: Boolean? = null) {
+        val d = desk ?: return
+        if (deskSent) return
+        deskSent = true
+        val msg = JSONObject().put("type", "collected").put("requestId", d.task.requestId)
+        found?.let { msg.put("found", it) }
+        d.next?.let { msg.put("nextRequestId", it.requestId) }
+        send(msg)
     }
 
     fun showPin() {
@@ -360,9 +404,11 @@ class RobotBridge(private val ui: Ui) :
                     setScreen(Screen.IDLE)
                     report("idle")
                 } else {
-                    setScreen(Screen.ARRIVED)
+                    // QR 인증은 물품을 받는 대여 학생만 한다
+                    val rental = task?.rental == true
+                    setScreen(if (rental) Screen.ARRIVED else Screen.CONFIRM)
                     report("arrived")
-                    speak("${task?.seat}번 좌석에 도착했습니다. 앱의 QR 코드를 보여 주세요.")
+                    speak("${task?.seat}번 좌석에 도착했습니다. ${if (rental) "앱의 QR 코드를 보여 주세요." else "바구니에 물품을 넣어 주세요."}")
                 }
             }
             OnGoToLocationStatusChangedListener.ABORT -> when {
