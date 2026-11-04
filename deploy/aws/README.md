@@ -4,7 +4,7 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `setup.sh` | 서버 안에서 한 번 실행. 스왑 1GB, Node.js 22, nginx(WebSocket·SSE 프록시, 관리자 기본 인증), systemd 서비스, `deploy.sh` 생성. 여러 번 실행해도 안전하다 |
+| `setup.sh` | 서버 안에서 한 번 실행. 스왑 1GB, Node.js 22, nginx(WebSocket·SSE 프록시, 관리자 기본 인증), systemd 서비스, `deploy.sh`, 자동 배포 타이머(2분마다 `main` 확인) 생성. 여러 번 실행해도 안전하다 |
 | `set-admin-password.ps1` | 관리자 페이지 비밀번호 설정. 비밀번호는 PC에서만 입력받고 서버에는 해시만 보낸다 |
 | `cleanup.ps1` | 만든 AWS 리소스를 모두 지운다 (학기 끝나면). 되돌릴 수 없다 |
 
@@ -22,8 +22,10 @@
 
 핫스팟·학교 Wi-Fi에서는 SSH가 막혀서 AWS Systems Manager로 관리한다. AWS CLI 로그인과 Session Manager 플러그인이 필요하다.
 
+`main`에 병합하면 2분 안에 자동으로 배포되므로 평소에는 아래 명령이 필요 없다.
+
 ```bash
-# main 최신 코드로 다시 배포
+# 기다리지 않고 바로 main 최신 코드로 배포
 aws ssm send-command --instance-ids i-0af56579a4627975b --document-name AWS-RunShellScript --parameters commands="/opt/temi-library-rental/deploy.sh"
 
 # 서버 셸 접속 (로그: journalctl -u temi-rental -f)

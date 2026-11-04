@@ -37,13 +37,16 @@ npm start
 | TEMI 앱 서버 주소 (앱 기본값) | `ws://54.117.20.190/ws/robot` |
 
 - 구성: nginx(80번) → Node 서버(3000번, systemd `temi-rental`). 데이터는 서버의 `server/data/app.db`.
-- **`main`에 병합한 뒤 서버에 반영하기** (관리 권한이 있는 사람만, AWS CLI 로그인 필요):
+- **자동 배포**: `main`에 병합하면 서버가 2분 안에 스스로 받아서 다시 시작한다 (systemd `temi-autodeploy.timer`).
+  그래서 `main`에 병합하기 전에 `cd server && npm test`를 꼭 통과시킨다. `main`이 곧 실제 서버다.
+  - DB 스키마 버전(`server/src/db.js`의 `SCHEMA_VERSION`)을 올리면 서버 DB가 초기화된다. 시연 직전에는 올리지 않는다.
+- 바로 반영하고 싶을 때·로그를 볼 때 (AWS CLI 로그인한 PC에서):
 
   ```bash
   aws ssm send-command --instance-ids i-0af56579a4627975b --document-name AWS-RunShellScript --parameters commands="/opt/temi-library-rental/deploy.sh"
   ```
 
-- 서버 로그 보기: `aws ssm start-session --target i-0af56579a4627975b` 접속 후 `journalctl -u temi-rental -f`
+  서버 셸: `aws ssm start-session --target i-0af56579a4627975b` → 서버 로그 `journalctl -u temi-rental -f`, 자동 배포 기록 `journalctl -u temi-autodeploy`
 - 실제 TEMI 앱과 시뮬레이터를 동시에 켜 두면 서버가 로봇 1대만 받아서 서로 연결을 끊는다. 시험할 때는 하나만 켠다.
 
 ### 시연 순서

@@ -134,7 +134,50 @@ curl -fsS http://127.0.0.1:3000/api/info && echo
 DEPLOY
 chmod +x "$APP_DIR/deploy.sh"
 
+echo "== 자동 배포: 2분마다 GitHub main을 확인해서 새 커밋이 있으면 deploy.sh"
+cat > "$APP_DIR/autodeploy.sh" <<'AUTO'
+#!/usr/bin/env bash
+# temi-autodeploy.timer가 2분마다 실행한다. 새 커밋이 없으면 아무것도 하지 않는다.
+set -euo pipefail
+cd /opt/temi-library-rental
+sudo -u temi git fetch -q origin main
+local_rev=$(sudo -u temi git rev-parse HEAD)
+remote_rev=$(sudo -u temi git rev-parse origin/main)
+[ "$local_rev" = "$remote_rev" ] && exit 0
+echo "새 커밋 ${remote_rev:0:7} 배포 (이전 ${local_rev:0:7})"
+exec /opt/temi-library-rental/deploy.sh
+AUTO
+chmod +x "$APP_DIR/autodeploy.sh"
+
+cat > /etc/systemd/system/temi-autodeploy.service <<'UNIT'
+[Unit]
+Description=Deploy temi-library-rental when GitHub main changes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# 이전 배포가 아직 돌고 있으면 건너뛴다
+ExecStart=/usr/bin/flock -n /run/temi-autodeploy.lock /opt/temi-library-rental/autodeploy.sh
+UNIT
+
+cat > /etc/systemd/system/temi-autodeploy.timer <<'UNIT'
+[Unit]
+Description=Check GitHub main every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now temi-autodeploy.timer
+
 echo "== 확인"
 sleep 2
 systemctl is-active temi-rental
+systemctl is-active temi-autodeploy.timer
 curl -fsS http://127.0.0.1:3000/api/info && echo
