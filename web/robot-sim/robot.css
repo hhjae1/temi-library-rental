@@ -87,71 +87,33 @@
   97% { transform: scaleY(0.1); }
 }
 
-.bar {
-  width: 70%;
-  height: 1.6cqh;
-  background: #24332f;
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.bar span {
-  display: block;
-  height: 100%;
-  background: #5cc4a6;
-  transition: width 0.25s linear;
-}
-
-.arrive {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4cqh;
-  width: 100%;
-  align-items: center;
-  text-align: left;
-}
-
-.pinpad {
-  display: grid;
-  gap: 1.6cqh;
-  justify-items: center;
-}
-
-.pin-dots {
-  display: flex;
-  gap: 2cqh;
-  font-size: 5cqh;
-  letter-spacing: 0.2em;
-  min-height: 7cqh;
-}
-
-.keys {
-  display: grid;
-  grid-template-columns: repeat(3, 11cqh);
-  gap: 1.4cqh;
-}
-
-.keys button,
 .temi-btn {
   border: none;
   border-radius: 1.6cqh;
-  background: #24332f;
-  color: #fff;
-  font-size: 3.8cqh;
+  background: #5cc4a6;
+  color: #08231b;
+  font-size: 4.2cqh;
   font-weight: 700;
-  height: 9cqh;
+  padding: 0 10cqh;
+  height: 12cqh; /* 서서 누르는 버튼이라 크게 */
+  margin-top: 2cqh;
   cursor: pointer;
 }
 
-.keys button:active {
-  background: #35514a;
+.temi-btn:active {
+  background: #46a88b;
 }
 
-.temi-btn {
-  background: #5cc4a6;
-  color: #08231b;
-  padding: 0 6cqh;
-  height: 10cqh;
+/* 이동 중: 화면을 어둡게 하고 터치를 막는다 */
+.screen[data-state='moving'] {
+  background: #050a09;
+  pointer-events: none;
+}
+
+.moving-text {
+  font-size: 7cqh !important;
+  font-weight: 700;
+  color: #4d5d58 !important;
 }
 
 .banner {

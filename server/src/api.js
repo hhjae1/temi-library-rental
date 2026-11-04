@@ -22,24 +22,35 @@ const userIdOf = (value) => {
   return s;
 };
 
-export function createApi({ service, dispatcher, robot }) {
+export function createApi({ service, dispatcher, robot, config }) {
   const api = express.Router();
   api.use(express.json());
 
   api.get('/catalog', wrap(() => service.catalog()));
   api.get('/items', wrap(() => service.listItems()));
-  api.get('/stations', wrap(() => service.listStations()));
+  // 서비스 구역과 신청 가능한 좌석 번호 범위 (학생 앱 안내용)
+  api.get(
+    '/info',
+    wrap(() => {
+      const zones = service.listZones();
+      return {
+        serviceArea: config.serviceArea,
+        seatMin: Math.min(...zones.map((z) => z.seat_from)),
+        seatMax: Math.max(...zones.map((z) => z.seat_to)),
+      };
+    }),
+  );
   api.get('/robot', wrap(() => robot.snapshot()));
 
   api.get('/requests', wrap((req) => service.listRequests({ userId: userIdOf(req.query.userId) })));
 
-  // 본인 요청 상세. 로봇이 이동 중이거나 도착했을 때 인증용 QR·PIN을 함께 준다.
+  // 본인 요청 상세. 로봇에 배정된 뒤부터 도착까지 인증용 QR을 함께 준다 (PIN은 개발용 예비).
   api.get(
     '/requests/:id',
     wrap(async (req) => {
       const row = service.getOwnedRequest(idOf(req.params.id), userIdOf(req.query.userId));
       const out = service.toPublic(row);
-      if (row.status === S.MOVING || row.status === S.ARRIVED) {
+      if ([S.PREPARING, S.MOVING, S.ARRIVED].includes(row.status)) {
         const payload = qrPayload(row.qr_token);
         out.auth = { payload, pin: row.pin, qrDataUrl: await QRCode.toDataURL(payload, { margin: 1, width: 320 }) };
       }
@@ -50,13 +61,13 @@ export function createApi({ service, dispatcher, robot }) {
   api.post(
     '/requests',
     wrap((req) => {
-      const { type, itemId, rentalId, stationId, seat, quantity = 1 } = req.body ?? {};
+      const { type, itemId, rentalId, seat, quantity = 1 } = req.body ?? {};
       const userId = userIdOf(req.body?.userId);
       let created;
       if (type === 'rental') {
-        created = service.createRentalRequest({ userId, itemId: idOf(itemId), quantity, stationId: idOf(stationId), seat });
+        created = service.createRentalRequest({ userId, itemId: idOf(itemId), quantity, seat });
       } else if (type === 'return') {
-        created = service.createReturnRequest({ userId, rentalId: idOf(rentalId), stationId: idOf(stationId), seat });
+        created = service.createReturnRequest({ userId, rentalId: idOf(rentalId), seat });
       } else {
         throw new HttpError(400, "type은 'rental' 또는 'return'이어야 합니다.");
       }

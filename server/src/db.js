@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 // 스키마가 바뀌면 올린다. 버전이 다르면 개발용 DB를 새로 만든다 (프로토타입 단계).
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 -- 홈 화면에 보이는 물품 묶음 (충전기, 담요 ...)
@@ -31,15 +31,17 @@ CREATE TABLE IF NOT EXISTS items (
   stock        INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0)
 );
 
--- temi가 찾아가는 열람실. temi_location은 TEMI 맵에 저장한 위치 이름과 같아야 한다.
--- 좌석 번호는 요청마다 따로 받고, temi는 열람실 지점까지 이동한 뒤 화면에 좌석 번호를 띄운다.
-CREATE TABLE IF NOT EXISTS stations (
+-- 좌석 번호 범위별로 temi가 찾아갈 지점. 학생은 좌석 번호만 입력하고, 서버가 범위로 지점을 고른다.
+-- temi_location은 TEMI 맵에 저장한 위치 이름과 같아야 한다. temi는 이 지점에 멈추고 화면에 좌석 번호를 띄운다.
+CREATE TABLE IF NOT EXISTS zones (
   id              INTEGER PRIMARY KEY,
-  floor           INTEGER NOT NULL,
-  name            TEXT NOT NULL,
+  name            TEXT NOT NULL,     -- 관리자용 구역 이름 (A구역 ...)
+  seat_from       INTEGER NOT NULL,
+  seat_to         INTEGER NOT NULL,
   temi_location   TEXT NOT NULL UNIQUE,
   sim_travel_sec  INTEGER NOT NULL DEFAULT 8,
-  active          INTEGER NOT NULL DEFAULT 1
+  active          INTEGER NOT NULL DEFAULT 1,
+  CHECK (seat_from <= seat_to)
 );
 
 CREATE TABLE IF NOT EXISTS rentals (
@@ -47,7 +49,7 @@ CREATE TABLE IF NOT EXISTS rentals (
   user_id       TEXT NOT NULL,
   item_id       INTEGER NOT NULL REFERENCES items(id),
   quantity      INTEGER NOT NULL DEFAULT 1,
-  station_id    INTEGER REFERENCES stations(id),
+  zone_id       INTEGER REFERENCES zones(id),
   seat          TEXT,
   status        TEXT NOT NULL,
   rented_at     INTEGER NOT NULL,
@@ -61,7 +63,7 @@ CREATE TABLE IF NOT EXISTS requests (
   user_id            TEXT NOT NULL,
   item_id            INTEGER NOT NULL REFERENCES items(id),
   quantity           INTEGER NOT NULL DEFAULT 1,
-  station_id         INTEGER NOT NULL REFERENCES stations(id),
+  zone_id            INTEGER NOT NULL REFERENCES zones(id),
   seat               TEXT NOT NULL,
   rental_id          INTEGER REFERENCES rentals(id),
   status             TEXT NOT NULL,
@@ -70,7 +72,8 @@ CREATE TABLE IF NOT EXISTS requests (
   attempts           INTEGER NOT NULL DEFAULT 0,
   fail_reason        TEXT,
   created_at         INTEGER NOT NULL,
-  dispatched_at      INTEGER,
+  dispatched_at      INTEGER,           -- 로봇에 배정된 시각 (출발 준비 시작)
+  departed_at        INTEGER,           -- TEMI 화면에서 출발 버튼을 누른 시각
   arrived_at         INTEGER,
   updated_at         INTEGER NOT NULL,
   status_changed_at  INTEGER NOT NULL
@@ -131,13 +134,13 @@ function seedDb(db) {
     [['밴드', '일회용 밴드', 5]],
   );
 
-  const station = db.prepare('INSERT INTO stations (floor, name, temi_location, sim_travel_sec) VALUES (?, ?, ?, ?)');
+  // 좌석 범위와 지점 이름은 예시. 인문자료실 좌석 배치를 조사한 뒤 바꾸고, 같은 이름으로 TEMI 맵에 위치를 저장한다.
+  const zone = db.prepare('INSERT INTO zones (name, seat_from, seat_to, temi_location, sim_travel_sec) VALUES (?, ?, ?, ?, ?)');
   for (const row of [
-    [1, '인문자료실', 'f1-humanities', 6],
-    [2, '제1열람실', 'f2-reading-1', 9],
-    [2, '제2열람실', 'f2-reading-2', 11],
-    [3, '제3열람실', 'f3-reading-3', 14],
-  ]) station.run(...row);
+    ['A구역', 1, 40, 'humanities-a', 6],
+    ['B구역', 41, 80, 'humanities-b', 9],
+    ['C구역', 81, 120, 'humanities-c', 12],
+  ]) zone.run(...row);
 }
 
 export function transaction(db, fn) {

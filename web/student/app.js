@@ -4,19 +4,18 @@ import { $, api, esc, OPEN_STATUSES, storage, subscribe, toast } from '/shared/a
 import { icon, illustration } from './illustrations.js';
 
 const USER_KEY = 'tlr.userId';
-const PLACE_KEY = 'tlr.lastPlace';
+const SEAT_KEY = 'tlr.lastSeat';
 
 const state = {
   userId: storage.get(USER_KEY),
   catalog: [],
-  stations: [],
+  info: { serviceArea: '', seatMin: 1, seatMax: 9999 }, // 서비스 구역과 좌석 번호 범위
   robot: null,
   requests: [],
   rentals: [],
-  auth: null, // 도착 시 인증용 { requestId, payload, pin, qrDataUrl }
+  auth: null, // 도착 시 temi에 보여줄 QR { requestId, payload, qrDataUrl }
   detail: null, // 물품 상세 선택 { categoryId, itemId, quantity, guideOk }
-  draft: null, // 위치 선택 중인 요청 { mode, itemId, quantity, rentalId, stationId, seat }
-  showQr: false,
+  draft: null, // 좌석 입력 중인 요청 { mode, itemId, quantity, rentalId, seat }
 };
 
 const root = $('#app');
@@ -26,13 +25,16 @@ const root = $('#app');
 const ROBOT_LABEL = {
   offline: 'temi 연결 끊김',
   idle: 'temi 대기 중',
+  ready: 'temi 출발 준비 중',
   moving: 'temi 이동 중',
   arrived: 'temi 도착',
   returning: 'temi 복귀 중',
+  stopped: 'temi 멈춤',
 };
 
 const STATUS_CHIP = {
   queued: ['대기 중', ''],
+  preparing: ['출발 준비', ''],
   moving: ['이동 중', ''],
   arrived: ['도착', ''],
   verified: ['인증 완료', ''],
@@ -60,23 +62,17 @@ const dayLabel = (ms) => {
 
 // "USB-C 충전기" 처럼 종류가 있는 물품은 종류 + 묶음 이름으로 부른다
 const itemLabel = (row) => (row.option_label ? `${row.item_name} ${row.category_name}` : row.item_name);
-const placeLabel = (row, sep = ' · ') => `${row.floor}층${sep}${row.station_name}`;
-const stationById = (id) => state.stations.find((s) => s.id === id);
+// 학생은 좌석 번호만 입력한다. 구역(층·열람실)은 서비스 구역 하나로 고정
+const seatLabel = (seat) => `${state.info.serviceArea} · ${seat}번 좌석`;
 const activeRequest = () => state.requests.find((r) => OPEN_STATUSES.includes(r.status));
 const userQuery = () => `?userId=${encodeURIComponent(state.userId)}`;
 
-function lastPlace() {
-  try {
-    return JSON.parse(storage.get(PLACE_KEY)) ?? {};
-  } catch {
-    return {};
-  }
-}
+const lastSeat = () => storage.get(SEAT_KEY) ?? '';
 
 // ── 데이터 ─────────────────────────────
 
 async function loadAll() {
-  [state.catalog, state.stations, state.robot] = await Promise.all([api('/catalog'), api('/stations'), api('/robot')]);
+  [state.catalog, state.info, state.robot] = await Promise.all([api('/catalog'), api('/info'), api('/robot')]);
   if (state.userId) await loadMine();
 }
 
@@ -87,10 +83,10 @@ async function loadMine() {
   notifyChange(before);
 }
 
-// temi가 출발하면 인증용 PIN·QR을 미리 받아 둔다
+// temi에 배정되면 인증용 QR을 미리 받아 둔다
 async function loadAuth() {
   const active = activeRequest();
-  if (!active || !['moving', 'arrived'].includes(active.status)) {
+  if (!active || !['preparing', 'moving', 'arrived'].includes(active.status)) {
     state.auth = null;
     return;
   }
@@ -104,7 +100,7 @@ function notifyChange(before) {
   const now = state.requests.find((r) => r.id === before.id);
   if (!now || now.status === before.status) return;
   if (now.status === 'arrived') {
-    toast('temi가 도착했어요! 인증번호를 temi 화면에 입력해주세요.');
+    toast('temi가 도착했어요! QR 코드를 temi 카메라에 보여주세요.');
     navigator.vibrate?.(200);
   } else if (now.status === 'failed' || now.status === 'expired') {
     toast(`요청이 끝났어요 · ${now.fail_reason ?? ''}`, 'error');
@@ -322,16 +318,13 @@ function viewItem(categoryId) {
     </div>`;
 }
 
-// ── 화면 3: 배달 위치 선택 및 요청 확인 ─────────────────────────────
+// ── 화면 3: 좌석 입력 및 요청 확인 ─────────────────────────────
 
 function viewLocation() {
   const d = state.draft;
   if (!d) return redirect('#/');
   const isRental = d.mode === 'rental';
-  const floors = [...new Set(state.stations.map((s) => s.floor))];
-  const station = stationById(d.stationId) ?? state.stations[0];
-  d.stationId = station.id;
-  const rooms = state.stations.filter((s) => s.floor === station.floor);
+  const { serviceArea, seatMin, seatMax } = state.info;
 
   return `
     ${navbar(isRental ? '배달 위치 선택' : '반납 위치 선택', isRental ? `#/item/${d.categoryId}` : '#/status')}
@@ -339,48 +332,39 @@ function viewLocation() {
       <section>
         <span class="chip">${isRental ? '대여 요청 전 확인' : '반납 요청 전 확인'}</span>
         <h1 class="title md" style="margin-top:10px">${isRental ? '어디로 가져다드릴까요?' : '어디로 찾아갈까요?'}</h1>
-        <p class="lead">지금 이용 중인 열람실과 좌석을 알려주세요.</p>
+        <p class="lead">지금 앉아 있는 ${esc(serviceArea)} 좌석 번호를 알려주세요.</p>
       </section>
-
-      <div class="field">
-        <span>도서관 층</span>
-        <div class="segmented">
-          ${floors.map((f) => `<button data-action="floor" data-floor="${f}" aria-pressed="${f === station.floor}">${f}층</button>`).join('')}
-        </div>
-      </div>
-
-      <label class="field">
-        <span>열람실</span>
-        <div class="select">
-          <select id="room">${rooms.map((s) => `<option value="${s.id}" ${s.id === station.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
-          ${icon('chevronDown')}
-        </div>
-      </label>
 
       <label class="field">
         <span>좌석 번호</span>
         <div class="input">
-          <input id="seat" inputmode="numeric" autocomplete="off" maxlength="10" placeholder="예: 128" value="${esc(d.seat ?? '')}" />
+          <input id="seat" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="4" placeholder="예: 28" value="${esc(d.seat ?? '')}" />
           <span class="suffix">번 좌석</span>
         </div>
-        <span class="caption">좌석에 표시된 번호를 입력해주세요.</span>
+        <span class="caption">좌석에 표시된 번호를 입력해주세요 (${seatMin}~${seatMax}번).</span>
       </label>
 
       <section class="card summary">
         <h3>${icon('clipboard')} 요청 내용을 확인해주세요</h3>
         <div class="kv"><span>${isRental ? '대여 물품' : '반납 물품'}</span><b>${esc(d.label)} · ${d.quantity}개</b></div>
         <div class="divider"></div>
-        <div class="kv"><span>${isRental ? '배달 장소' : '방문 장소'}</span><b>${esc(placeLabel({ floor: station.floor, station_name: station.name }))}</b></div>
+        <div class="kv"><span>${isRental ? '배달 장소' : '방문 장소'}</span><b>${esc(serviceArea)}</b></div>
         <div class="kv"><span>좌석</span><b id="sum-seat">${d.seat ? `${esc(d.seat)}번` : '-'}</b></div>
       </section>
       <p class="caption">요청 후 진행 상황은 대여 현황에서 볼 수 있어요.\n배달 가능 여부는 운영 조건에 따라 달라질 수 있어요.</p>
     </main>
     <div class="cta">
-      <button class="btn" id="submit" data-action="submit" ${d.seat ? '' : 'disabled'}>
+      <button class="btn" id="submit" data-action="submit" ${validSeat(d.seat) ? '' : 'disabled'}>
         ${isRental ? '이 좌석으로 대여 요청' : '이 좌석에서 반납 요청'}
       </button>
     </div>`;
 }
+
+// 서버도 같은 범위로 다시 확인한다
+const validSeat = (value) => {
+  const seat = String(value ?? '').trim();
+  return /^[0-9]{1,4}$/.test(seat) && Number(seat) >= state.info.seatMin && Number(seat) <= state.info.seatMax;
+};
 
 // ── 화면 4: temi 배달 진행 및 수령 확인 ─────────────────────────────
 
@@ -392,15 +376,22 @@ function viewDelivery(r) {
       title: '요청을 접수했어요',
       lead: '앞선 요청이 끝나면 temi가 출발해요.\n자리에서 편하게 기다려주세요.',
     },
+    preparing: {
+      chip: '출발 준비 중',
+      title: isRental ? '물품을 담고 있어요' : 'temi가 곧 출발해요',
+      lead: isRental
+        ? '대여 데스크에서 바구니에 물품을 담고 있어요.\n다 담으면 temi가 출발해요.'
+        : '대여 데스크에서 temi가 출발할 준비를 하고 있어요.',
+    },
     moving: {
       chip: isRental ? '배달 중' : '방문 중',
       title: 'temi가 가고 있어요',
-      lead: '좌석 근처에 도착하면 알려드릴게요.\n도착하면 아래 인증번호를 temi에 입력해요.',
+      lead: '좌석 근처에 도착하면 알려드릴게요.\n도착하면 앱의 QR 코드를 temi 카메라에 보여주세요.',
     },
     arrived: {
-      chip: '도착 · 인증 대기',
+      chip: '도착 · QR 인증 대기',
       title: 'temi가 도착했어요',
-      lead: 'temi 화면에 인증번호를 입력하거나\nQR 코드를 보여주세요.',
+      lead: '아래 QR 코드를 temi 카메라에 보여주세요.',
     },
     verified: {
       chip: isRental ? '도착 · 수령 대기' : '도착 · 반납 대기',
@@ -411,10 +402,10 @@ function viewDelivery(r) {
     },
   }[r.status];
 
-  const stage = { queued: 0, moving: 1, arrived: 2, verified: 2 }[r.status];
+  const stage = { queued: 0, preparing: 0, moving: 1, arrived: 2, verified: 2 }[r.status];
   const steps = [
     ['요청 접수', hhmm(r.created_at), 'dots'],
-    [isRental ? '배달 중' : '방문 중', r.dispatched_at ? `${hhmm(r.dispatched_at)} 출발` : '', 'truck'],
+    [isRental ? '배달 중' : '방문 중', r.departed_at ? `${hhmm(r.departed_at)} 출발` : '', 'truck'],
     ['도착', hhmm(r.arrived_at), 'pin'],
   ]
     .map(([label, time, ic], i) => {
@@ -426,16 +417,10 @@ function viewDelivery(r) {
   const auth =
     r.status === 'arrived' && state.auth?.requestId === r.id
       ? `<section class="card auth">
-          <h3>temi 화면에 인증번호를 입력해주세요</h3>
-          <div class="pin" aria-label="인증번호 ${esc(state.auth.pin)}">${[...state.auth.pin].map((n) => `<span>${n}</span>`).join('')}</div>
-          <button class="link" data-action="toggle-qr">${icon('qr', 'sm')} ${state.showQr ? 'QR 닫기' : 'QR로 인증하기'}</button>
-          ${
-            state.showQr
-              ? `<img src="${state.auth.qrDataUrl}" alt="인증용 QR 코드" />
-                 <p class="caption">temi 카메라에 QR 코드를 보여주세요.</p>
-                 <p class="dev-code" title="시뮬레이터의 'QR 스캔 흉내' 칸에 붙여 넣으세요">개발용 코드: ${esc(state.auth.payload)}</p>`
-              : ''
-          }
+          <h3>${icon('qr', 'sm')} temi 카메라에 QR 코드를 보여주세요</h3>
+          <img src="${state.auth.qrDataUrl}" alt="인증용 QR 코드" />
+          <p class="caption">잘 읽히지 않으면 화면 밝기를 높여주세요.</p>
+          <p class="dev-code" title="시뮬레이터의 'QR 스캔 흉내' 칸에 붙여 넣으세요">개발용 코드: ${esc(state.auth.payload)}</p>
         </section>`
       : r.status === 'verified'
         ? `<section class="card verified">${icon('checkCircle')} temi에서 인증됐어요</section>`
@@ -443,8 +428,9 @@ function viewDelivery(r) {
 
   const cta = {
     queued: `<button class="btn ghost danger" data-action="cancel" data-id="${r.id}">요청 취소</button>`,
+    preparing: `<button class="btn ghost danger" data-action="cancel" data-id="${r.id}">요청 취소</button>`,
     moving: `<button class="btn ghost danger" data-action="cancel" data-id="${r.id}">요청 취소</button>`,
-    arrived: `<button class="btn" disabled>temi에서 인증하면 ${isRental ? '수령' : '반납'}할 수 있어요</button>`,
+    arrived: `<button class="btn" disabled>temi에서 QR 인증하면 ${isRental ? '수령' : '반납'}할 수 있어요</button>`,
     verified: `<button class="btn" data-action="complete" data-id="${r.id}">${isRental ? '물품을 받았어요' : '반납을 완료했어요'}</button>`,
   }[r.status];
 
@@ -462,7 +448,7 @@ function viewDelivery(r) {
           ${illustration('temi')}
           <div>
             <div class="label">${isRental ? '배달 위치' : '방문 위치'}</div>
-            <div class="room">${esc(placeLabel(r, ' '))}</div>
+            <div class="room">${esc(state.info.serviceArea)}</div>
             <div class="seat">${esc(r.seat)}번 좌석</div>
           </div>
         </div>
@@ -514,7 +500,7 @@ function viewRentals() {
             </div>
           </div>
           <div class="divider"></div>
-          <div class="kv"><span>수령 장소</span><b>${t.station_name ? `${esc(placeLabel(t))} · ${esc(t.seat)}번` : '-'}</b></div>
+          <div class="kv"><span>수령 장소</span><b>${t.seat ? esc(seatLabel(t.seat)) : '-'}</b></div>
           <div class="ok-line">${icon('checkCircle', 'sm')} ${
             t.status === 'returned' ? '반납이 접수됐어요. 관리자 검수를 기다리고 있어요.' : '수령 확인이 완료되어 대여가 시작됐어요.'
           }</div>
@@ -525,7 +511,7 @@ function viewRentals() {
         <div class="mint-card visit" style="margin-top:-8px">
           <div>
             <div class="label">로봇이 방문할 위치</div>
-            <div class="place">${icon('pin', 'sm')} ${t.station_name ? `${esc(placeLabel(t, ' '))} · ${esc(t.seat)}번 좌석` : '위치를 선택해주세요'}</div>
+            <div class="place">${icon('pin', 'sm')} ${t.seat ? esc(seatLabel(t.seat)) : '좌석을 입력해주세요'}</div>
           </div>
           <button class="link" data-action="return-change" data-id="${t.id}">위치 변경</button>
         </div>
@@ -589,8 +575,9 @@ function viewGuide() {
       <section class="card">
         <ol class="numbered">
           <li>대여 홈에서 필요한 물품과 수량을 골라요.</li>
-          <li>지금 앉은 열람실과 좌석 번호를 입력해요.</li>
-          <li>temi가 도착하면 temi 화면에 인증번호를 입력하거나 QR을 보여줘요.</li>
+          <li>지금 앉은 좌석 번호를 입력해요.</li>
+          <li>대여 데스크에서 물품을 싣고 temi가 출발해요.</li>
+          <li>temi가 도착하면 앱의 QR 코드를 temi 카메라에 보여줘요.</li>
           <li>바구니에서 물품을 꺼내고 '물품을 받았어요'를 눌러요.</li>
           <li>다 쓰면 대여 현황에서 반납을 요청해요.</li>
         </ol>
@@ -635,7 +622,6 @@ function render() {
 }
 
 window.addEventListener('hashchange', () => {
-  state.showQr = false;
   render();
   window.scrollTo(0, 0);
 });
@@ -643,18 +629,13 @@ window.addEventListener('hashchange', () => {
 // ── 동작 ─────────────────────────────
 
 function startDraft(draft) {
-  const place = lastPlace();
-  state.draft = {
-    stationId: stationById(place.stationId) ? place.stationId : state.stations[0]?.id,
-    seat: place.seat ?? '',
-    ...draft,
-  };
+  state.draft = { seat: lastSeat(), ...draft };
   location.hash = '#/location';
 }
 
-async function submitReturn(rental, stationId, seat) {
-  await api('/requests', { method: 'POST', body: { userId: state.userId, type: 'return', rentalId: rental.id, stationId, seat } });
-  storage.set(PLACE_KEY, JSON.stringify({ stationId, seat }));
+async function submitReturn(rental, seat) {
+  await api('/requests', { method: 'POST', body: { userId: state.userId, type: 'return', rentalId: rental.id, seat } });
+  storage.set(SEAT_KEY, seat);
   location.hash = '#/status';
 }
 
@@ -682,24 +663,19 @@ const actions = {
       label: c.option_label ? `${item.name} ${c.name}` : item.name,
     });
   },
-  floor(el) {
-    const floor = Number(el.dataset.floor);
-    state.draft.stationId = state.stations.find((s) => s.floor === floor).id;
-    render();
-  },
   async submit() {
     const d = state.draft;
     const seat = d.seat.trim();
     if (d.mode === 'rental') {
       await api('/requests', {
         method: 'POST',
-        body: { userId: state.userId, type: 'rental', itemId: d.itemId, quantity: d.quantity, stationId: d.stationId, seat },
+        body: { userId: state.userId, type: 'rental', itemId: d.itemId, quantity: d.quantity, seat },
       });
-      storage.set(PLACE_KEY, JSON.stringify({ stationId: d.stationId, seat }));
+      storage.set(SEAT_KEY, seat);
       state.detail = null;
       location.hash = '#/status';
     } else {
-      await submitReturn({ id: d.rentalId }, d.stationId, seat);
+      await submitReturn({ id: d.rentalId }, seat);
     }
     state.draft = null;
   },
@@ -711,19 +687,15 @@ const actions = {
     await api(`/requests/${el.dataset.id}/complete`, { method: 'POST', body: { userId: state.userId } });
     toast('완료했어요. 편안히 이용하세요!');
   },
-  'toggle-qr'() {
-    state.showQr = !state.showQr;
-    render();
-  },
   help(el) {
     const r = state.requests.find((x) => x.id === Number(el.dataset.id));
-    const cancellable = ['queued', 'moving', 'arrived'].includes(r?.status);
+    const cancellable = ['queued', 'preparing', 'moving', 'arrived'].includes(r?.status);
     const sheet = $('#sheet');
     sheet.innerHTML = `
       <form method="dialog" class="sheet-body">
         <h3>도움이 필요하신가요?</h3>
         <ol class="numbered">
-          <li>temi는 열람실 지정 지점에 멈춰요. 좌석 주변 통로를 확인해주세요.</li>
+          <li>temi는 좌석 근처 지정 지점에 멈춰요. 주변 통로를 확인해주세요.</li>
           <li>물품이 다르면 받지 말고 안내 데스크에 알려주세요.</li>
           <li>계속 오지 않으면 요청을 취소하고 다시 신청할 수 있어요.</li>
         </ol>
@@ -743,8 +715,8 @@ const actions = {
   },
   async 'return-here'(el) {
     const t = state.rentals.find((x) => x.id === Number(el.dataset.id));
-    if (!t.station_id) return actions['return-change'](el);
-    await submitReturn(t, t.station_id, t.seat);
+    if (!t.seat) return actions['return-change'](el);
+    await submitReturn(t, t.seat);
   },
   'return-change'(el) {
     const t = state.rentals.find((x) => x.id === Number(el.dataset.id));
@@ -753,7 +725,7 @@ const actions = {
       rentalId: t.id,
       quantity: t.quantity,
       label: itemLabel(t),
-      ...(t.station_id ? { stationId: t.station_id, seat: t.seat } : {}),
+      ...(t.seat ? { seat: t.seat } : {}),
     });
   },
   logout() {
@@ -776,10 +748,7 @@ root.addEventListener('click', (e) => {
 });
 
 root.addEventListener('change', (e) => {
-  if (e.target.id === 'room') {
-    state.draft.stationId = Number(e.target.value);
-    render();
-  } else if (e.target.id === 'guide-ok') {
+  if (e.target.id === 'guide-ok') {
     state.detail.guideOk = e.target.checked;
     render();
   }
@@ -791,7 +760,7 @@ root.addEventListener('input', (e) => {
   state.draft.seat = e.target.value;
   const seat = e.target.value.trim();
   $('#sum-seat').textContent = seat ? `${seat}번` : '-';
-  $('#submit').disabled = !seat;
+  $('#submit').disabled = !validSeat(seat);
 });
 
 root.addEventListener('submit', (e) => {

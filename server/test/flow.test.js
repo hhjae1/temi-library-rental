@@ -13,8 +13,8 @@ before(async () => {
 });
 after(() => server.close());
 
-async function call(path, { method = 'GET', body } = {}) {
-  const res = await fetch(`${base}/api${path}`, {
+async function call(path, { method = 'GET', body } = {}, root = base) {
+  const res = await fetch(`${root}/api${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -23,8 +23,8 @@ async function call(path, { method = 'GET', body } = {}) {
 }
 
 // 시뮬레이터 대신 테스트에서 직접 로봇 역할을 하는 클라이언트
-async function connectRobot() {
-  const ws = new WebSocket(`ws://localhost:${server.port}/ws/robot`);
+async function connectRobot(port = server.port) {
+  const ws = new WebSocket(`ws://localhost:${port}/ws/robot`);
   const inbox = [];
   const waiters = [];
   ws.on('message', (raw) => {
@@ -41,41 +41,62 @@ async function connectRobot() {
       if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0]);
       return new Promise((resolve) => waiters.push({ type, resolve }));
     },
+    has: (type) => inbox.some((m) => m.type === type),
+    // 홈베이스로 돌아왔다고 보고 — 이때 다음 요청이 배정된다
+    backHome() {
+      this.send({ type: 'status', state: 'returning' });
+      this.send({ type: 'status', state: 'idle' });
+    },
     close: () => ws.close(),
   };
   robot.send({ type: 'hello', robotId: 'test-robot', state: 'idle' });
   return robot;
 }
 
-const stockOf = async (itemId) => (await call('/items')).data.find((i) => i.id === itemId).stock;
-const waitStatus = async (id, userId, status) => {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const stockOf = async (itemId, root = base) => (await call('/items', {}, root)).data.find((i) => i.id === itemId).stock;
+const waitStatus = async (id, userId, status, root = base) => {
   for (let i = 0; i < 50; i++) {
-    const { data } = await call(`/requests/${id}?userId=${userId}`);
+    const { data } = await call(`/requests/${id}?userId=${userId}`, {}, root);
     if (data.status === status) return data;
-    await new Promise((r) => setTimeout(r, 20));
+    await sleep(20);
   }
   assert.fail(`요청 #${id}가 ${status} 상태가 되지 않음`);
 };
 
-test('대여 → 도착 → QR 인증 → 수령 → 방문 반납 → 검수', async () => {
+test('대여 → 출발 버튼 → 도착 → QR 인증 → 수령 → 홈 복귀 → 방문 반납 → 검수', async () => {
   const robot = await connectRobot();
   const user = 'S2024001';
   const itemId = 1; // USB-C 충전기
   const before = await stockOf(itemId);
 
-  const created = await call('/requests', { method: 'POST', body: { userId: user, type: 'rental', itemId, quantity: 2, stationId: 1, seat: '128' } });
-  assert.equal(created.status, 200);
+  const created = await call('/requests', { method: 'POST', body: { userId: user, type: 'rental', itemId, quantity: 2, seat: '128' } });
+  assert.equal(created.status, 400, '서비스 구역 밖 좌석은 거절');
+  const ok = await call('/requests', { method: 'POST', body: { userId: user, type: 'rental', itemId, quantity: 2, seat: '095' } });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.seat, '95', '좌석 번호 정규화');
   assert.equal(await stockOf(itemId), before - 2, '신청 시 수량만큼 재고 예약');
 
   const goTo = await robot.next('goTo');
-  assert.equal(goTo.requestId, created.data.id);
-  assert.equal(goTo.location, 'f1-humanities');
-  assert.equal(goTo.seat, '128');
+  assert.equal(goTo.requestId, ok.data.id);
+  assert.equal(goTo.location, 'humanities-c', '좌석 범위로 지점 결정');
+  assert.equal(goTo.seat, '95');
   assert.equal(goTo.quantity, 2);
-  robot.send({ type: 'status', requestId: goTo.requestId, state: 'moving' });
+  assert.equal(goTo.attempt, 1);
+  assert.equal(goTo.area, '인문자료실');
+
+  // 출발 버튼 전에는 출발 준비 상태이고, 이동 보고 없이 온 도착 보고는 무시한다
+  const preparing = await waitStatus(goTo.requestId, user, 'preparing');
+  assert.match(preparing.auth.payload, /^TLR1:/, '배정되면 QR을 미리 받는다');
+  robot.send({ type: 'status', requestId: goTo.requestId, state: 'arrived' });
+  await sleep(50);
+  assert.equal((await call(`/requests/${goTo.requestId}?userId=${user}`)).data.status, 'preparing');
+
+  robot.send({ type: 'status', requestId: goTo.requestId, state: 'moving' }); // 출발 버튼
+  const moving = await waitStatus(goTo.requestId, user, 'moving');
+  assert.ok(moving.departed_at, '출발 시각 기록');
   robot.send({ type: 'status', requestId: goTo.requestId, state: 'arrived' });
   const arrived = await waitStatus(goTo.requestId, user, 'arrived');
-  assert.match(arrived.auth.payload, /^TLR1:/);
   assert.match(arrived.auth.qrDataUrl, /^data:image\/png;base64,/);
 
   robot.send({ type: 'verify', requestId: goTo.requestId, code: 'wrong' });
@@ -89,14 +110,20 @@ test('대여 → 도착 → QR 인증 → 수령 → 방문 반납 → 검수', 
 
   const [rental] = (await call(`/rentals?userId=${user}`)).data;
   assert.equal(rental.status, 'active');
+  assert.equal(rental.seat, '95');
 
-  // 반납: PIN으로 인증하고 앱에서 완료
-  const ret = await call('/requests', { method: 'POST', body: { userId: user, type: 'return', rentalId: rental.id, stationId: 2, seat: '15' } });
+  // 반납: 로봇이 홈베이스로 돌아온 뒤에 배정된다
+  const ret = await call('/requests', { method: 'POST', body: { userId: user, type: 'return', rentalId: rental.id, seat: '15' } });
   assert.equal(ret.status, 200);
+  await sleep(50);
+  assert.equal(robot.has('goTo'), false, '복귀 전에는 배정하지 않음');
+  robot.backHome();
   const goTo2 = await robot.next('goTo');
+  assert.equal(goTo2.location, 'humanities-a');
+  robot.send({ type: 'status', requestId: goTo2.requestId, state: 'moving' });
   robot.send({ type: 'status', requestId: goTo2.requestId, state: 'arrived' });
   const arrived2 = await waitStatus(goTo2.requestId, user, 'arrived');
-  robot.send({ type: 'verify', requestId: goTo2.requestId, code: arrived2.auth.pin });
+  robot.send({ type: 'verify', requestId: goTo2.requestId, code: arrived2.auth.payload });
   assert.equal((await robot.next('verifyResult')).ok, true);
   assert.equal((await call(`/requests/${goTo2.requestId}/complete`, { method: 'POST', body: { userId: user } })).status, 200);
   await robot.next('end');
@@ -109,14 +136,21 @@ test('대여 → 도착 → QR 인증 → 수령 → 방문 반납 → 검수', 
   robot.close();
 });
 
+test('좌석 번호는 숫자이고 서비스 구역 안이어야 한다', async () => {
+  for (const seat of ['', 'A-7', '12a', '0', '121', '99999']) {
+    const { status } = await call('/requests', { method: 'POST', body: { userId: 'S-seat', type: 'rental', itemId: 3, seat } });
+    assert.equal(status, 400, `좌석 '${seat}'`);
+  }
+  const info = await call('/info');
+  assert.deepEqual(info.data, { serviceArea: '인문자료실', seatMin: 1, seatMax: 120 });
+});
+
 test('마지막 재고에 동시 신청하면 한 명만 성공', async () => {
   const itemId = 2;
   const stock = await stockOf(itemId);
   await call(`/admin/items/${itemId}`, { method: 'PUT', body: { stock: 1 } });
   const results = await Promise.all(
-    ['U1', 'U2', 'U3'].map((userId) =>
-      call('/requests', { method: 'POST', body: { userId, type: 'rental', itemId, stationId: 1, seat: '1' } }),
-    ),
+    ['U1', 'U2', 'U3'].map((userId) => call('/requests', { method: 'POST', body: { userId, type: 'rental', itemId, seat: '1' } })),
   );
   assert.deepEqual(results.map((r) => r.status).sort(), [200, 409, 409]);
   const winner = results.find((r) => r.status === 200).data;
@@ -130,18 +164,52 @@ test('이동이 계속 실패하면 재시도 후 실패 처리하고 재고 복
   const user = 'S2024002';
   const itemId = 4; // 담요
   const before = await stockOf(itemId);
-  const created = await call('/requests', { method: 'POST', body: { userId: user, type: 'rental', itemId, stationId: 3, seat: 'A-7' } });
+  const created = await call('/requests', { method: 'POST', body: { userId: user, type: 'rental', itemId, seat: '7' } });
 
   const first = await robot.next('goTo');
+  robot.send({ type: 'status', requestId: first.requestId, state: 'moving' });
   robot.send({ type: 'status', requestId: first.requestId, state: 'failed', detail: '경로 막힘' });
   const retry = await robot.next('goTo');
-  assert.equal(retry.attempt, 2);
+  assert.equal(retry.attempt, 2, '재시도는 출발 버튼 없이 바로 이동');
+  robot.send({ type: 'status', requestId: retry.requestId, state: 'moving' });
   robot.send({ type: 'status', requestId: retry.requestId, state: 'failed', detail: '경로 막힘' });
   assert.equal((await robot.next('end')).status, 'failed');
+  await robot.next('goHome');
 
   const { data } = await call(`/requests/${created.data.id}?userId=${user}`);
   assert.equal(data.status, 'failed');
   assert.equal(data.fail_reason, '경로 막힘');
   assert.equal(await stockOf(itemId), before);
   robot.close();
+});
+
+test('인증 후 수령 확인이 없으면 만료하고 재고를 되돌린다', async () => {
+  const fast = await startServer({
+    port: 0, dbFile: ':memory:', log: silent, sweepIntervalMs: 20, timeouts: { receiveMs: 100 },
+  });
+  const root = `http://localhost:${fast.port}`;
+  try {
+    const robot = await connectRobot(fast.port);
+    const user = 'S2024003';
+    const itemId = 5; // 물티슈
+    const before = await stockOf(itemId, root);
+    await call('/requests', { method: 'POST', body: { userId: user, type: 'rental', itemId, seat: '50' } }, root);
+    const goTo = await robot.next('goTo');
+    robot.send({ type: 'status', requestId: goTo.requestId, state: 'moving' });
+    robot.send({ type: 'status', requestId: goTo.requestId, state: 'arrived' });
+    const arrived = await waitStatus(goTo.requestId, user, 'arrived', root);
+    robot.send({ type: 'verify', requestId: goTo.requestId, code: arrived.auth.payload });
+    assert.equal((await robot.next('verifyResult')).ok, true);
+
+    const end = await robot.next('end');
+    assert.equal(end.status, 'expired');
+    const { data } = await call(`/requests/${goTo.requestId}?userId=${user}`, {}, root);
+    assert.equal(data.status, 'expired');
+    assert.match(data.fail_reason, /바구니 확인 필요/);
+    assert.equal(await stockOf(itemId, root), before, '만료되면 재고 복구');
+    assert.equal((await call(`/rentals?userId=${user}`, {}, root)).data.length, 0, '대여 기록 없음');
+    robot.close();
+  } finally {
+    await fast.close();
+  }
 });

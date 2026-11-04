@@ -27,6 +27,7 @@ export const $ = (selector, root = document) => root.querySelector(selector);
 
 export const REQUEST_STATUS_LABEL = {
   queued: '대기 중',
+  preparing: '출발 준비',
   moving: '이동 중',
   arrived: '도착',
   verified: '인증 완료',
@@ -49,14 +50,16 @@ export const RENTAL_STATUS_LABEL = {
 export const ROBOT_STATE_LABEL = {
   offline: '로봇 연결 끊김',
   idle: '로봇 대기 중',
+  ready: '로봇 출발 준비',
   moving: '로봇 이동 중',
   arrived: '로봇 도착',
   returning: '로봇 복귀 중',
+  stopped: '로봇 멈춤',
 };
 
 export const ITEM_KIND_LABEL = { rental: '대여', consumable: '소모품' };
 
-export const OPEN_STATUSES = ['queued', 'moving', 'arrived', 'verified'];
+export const OPEN_STATUSES = ['queued', 'preparing', 'moving', 'arrived', 'verified'];
 
 export function fmtTime(ms) {
   if (!ms) return '';

@@ -27,7 +27,7 @@ export async function startServer(overrides = {}) {
   const events = createEventHub(bus);
 
   app.get('/api/events', events.handler);
-  app.use('/api', createApi({ service, dispatcher, robot }));
+  app.use('/api', createApi({ service, dispatcher, robot, config }));
   app.use('/shared', express.static(`${WEB_DIR}shared`));
   app.use('/admin', express.static(`${WEB_DIR}admin`));
   app.use('/robot', express.static(`${WEB_DIR}robot-sim`));

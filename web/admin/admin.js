@@ -14,7 +14,7 @@ import {
 // TODO: 관리자 인증. 지금은 누구나 접근 가능하다.
 
 const itemLabel = (row) => (row.option_label ? `${row.item_name} ${row.category_name}` : row.item_name);
-const placeLabel = (row) => (row.station_name ? `${row.floor}층 ${row.station_name} · ${row.seat}번` : '-');
+const placeLabel = (row) => (row.seat ? `${row.seat}번 좌석 (${row.zone_name})` : '-');
 
 function renderRobot(robot) {
   const el = $('#robot');

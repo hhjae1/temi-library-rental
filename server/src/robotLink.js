@@ -33,7 +33,7 @@ export function createRobotLink({ server, bus, path = '/ws/robot', log = console
       const patch = { lastSeen: Date.now() };
       if (msg.type === 'hello') Object.assign(patch, { robotId: msg.robotId ?? null, state: msg.state ?? RobotState.IDLE });
       if (msg.type === 'status') {
-        patch.state = msg.state === 'failed' ? RobotState.IDLE : msg.state;
+        patch.state = msg.state === 'failed' ? RobotState.STOPPED : msg.state; // 실패하면 길 위에 멈춰 있다 (홈베이스 아님)
         patch.requestId = msg.requestId ?? null;
       }
       update(patch);

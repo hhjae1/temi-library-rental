@@ -24,18 +24,18 @@ const ITEM_COLUMNS = `
 
 const REQUEST_SELECT = `
   SELECT r.*, ${ITEM_COLUMNS},
-         s.floor, s.name AS station_name, s.temi_location, s.sim_travel_sec
+         z.name AS zone_name, z.temi_location, z.sim_travel_sec
   FROM requests r
   JOIN items i ON i.id = r.item_id
   JOIN categories c ON c.id = i.category_id
-  JOIN stations s ON s.id = r.station_id`;
+  JOIN zones z ON z.id = r.zone_id`;
 
 const RENTAL_SELECT = `
-  SELECT t.*, ${ITEM_COLUMNS}, s.floor, s.name AS station_name
+  SELECT t.*, ${ITEM_COLUMNS}, z.name AS zone_name
   FROM rentals t
   JOIN items i ON i.id = t.item_id
   JOIN categories c ON c.id = i.category_id
-  LEFT JOIN stations s ON s.id = t.station_id`;
+  LEFT JOIN zones z ON z.id = t.zone_id`;
 
 // 재고·요청·대여 기록을 다루는 도메인 로직. 로봇과의 통신은 dispatcher가 맡는다.
 export function createRentalService(db, bus) {
@@ -46,8 +46,8 @@ export function createRentalService(db, bus) {
     reserveItem: db.prepare('UPDATE items SET stock = stock - ? WHERE id = ? AND stock >= ?'),
     restockItem: db.prepare('UPDATE items SET stock = stock + ? WHERE id = ?'),
     setStock: db.prepare('UPDATE items SET stock = ? WHERE id = ?'),
-    stations: db.prepare('SELECT * FROM stations WHERE active = 1 ORDER BY floor, id'),
-    station: db.prepare('SELECT * FROM stations WHERE id = ? AND active = 1'),
+    zones: db.prepare('SELECT * FROM zones WHERE active = 1 ORDER BY seat_from, id'),
+    zoneForSeat: db.prepare('SELECT * FROM zones WHERE active = 1 AND ? BETWEEN seat_from AND seat_to ORDER BY id LIMIT 1'),
 
     request: db.prepare(`${REQUEST_SELECT} WHERE r.id = ?`),
     requestsOfUser: db.prepare(`${REQUEST_SELECT} WHERE r.user_id = ? ORDER BY r.id DESC LIMIT 50`),
@@ -59,22 +59,24 @@ export function createRentalService(db, bus) {
       `SELECT COUNT(*) AS n FROM requests WHERE user_id = ? AND status IN (${inList(OPEN_STATUSES)})`,
     ),
     insertRequest: db.prepare(`
-      INSERT INTO requests (type, user_id, item_id, quantity, station_id, seat, rental_id, status, qr_token, pin,
+      INSERT INTO requests (type, user_id, item_id, quantity, zone_id, seat, rental_id, status, qr_token, pin,
                             created_at, updated_at, status_changed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`),
     setStatus: db.prepare(
       'UPDATE requests SET status = ?, fail_reason = ?, updated_at = ?, status_changed_at = ? WHERE id = ?',
     ),
     setArrivedAt: db.prepare('UPDATE requests SET arrived_at = ? WHERE id = ?'),
+    setDepartedAt: db.prepare('UPDATE requests SET departed_at = ? WHERE id = ?'),
+    // 배정되면 출발 준비 상태가 된다. 실제 이동은 TEMI 화면의 출발 버튼(status: moving) 이후
     markDispatched: db.prepare(
-      `UPDATE requests SET status = 'moving', attempts = attempts + 1, dispatched_at = ?, updated_at = ?, status_changed_at = ?
+      `UPDATE requests SET status = 'preparing', attempts = attempts + 1, dispatched_at = ?, updated_at = ?, status_changed_at = ?
        WHERE id = ?`,
     ),
     linkRental: db.prepare('UPDATE requests SET rental_id = ? WHERE id = ?'),
 
     rental: db.prepare(`${RENTAL_SELECT} WHERE t.id = ?`),
     insertRental: db.prepare(
-      'INSERT INTO rentals (user_id, item_id, quantity, station_id, seat, status, rented_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO rentals (user_id, item_id, quantity, zone_id, seat, status, rented_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ),
     setRentalStatus: db.prepare('UPDATE rentals SET status = ? WHERE id = ?'),
     markReturned: db.prepare(`UPDATE rentals SET status = 'returned', returned_at = ? WHERE id = ?`),
@@ -104,14 +106,14 @@ export function createRentalService(db, bus) {
     return row;
   }
 
-  function requireStation(stationId) {
-    if (!sql.station.get(stationId)) throw new HttpError(404, '없는 열람실입니다.');
-  }
-
-  function seatOf(value) {
-    const seat = String(value ?? '').trim();
-    if (!/^[0-9A-Za-z-]{1,10}$/.test(seat)) throw new HttpError(400, '좌석 번호를 확인해주세요.');
-    return seat;
+  // 학생은 좌석 번호만 입력한다. 번호가 속한 구역이 temi가 찾아갈 지점이다.
+  function placeOf(value) {
+    const text = String(value ?? '').trim();
+    if (!/^[0-9]{1,4}$/.test(text)) throw new HttpError(400, '좌석 번호를 숫자로 입력해주세요.');
+    const seat = String(Number(text)); // "007" → "7"
+    const zone = sql.zoneForSeat.get(Number(seat));
+    if (!zone) throw new HttpError(400, `${seat}번은 서비스 구역의 좌석이 아니에요. 좌석 번호를 확인해주세요.`);
+    return { seat, zoneId: zone.id };
   }
 
   // 1차 프로토타입은 사용자당 진행 중인 요청 1건만 허용한다.
@@ -121,12 +123,12 @@ export function createRentalService(db, bus) {
     }
   }
 
-  function insertRequest({ type, userId, itemId, quantity, stationId, seat, rentalId = null }) {
+  function insertRequest({ type, userId, itemId, quantity, zoneId, seat, rentalId = null }) {
     const now = Date.now();
     const token = randomBytes(12).toString('hex');
     const pin = String(randomInt(0, 10_000)).padStart(4, '0');
     return Number(
-      sql.insertRequest.run(type, userId, itemId, quantity, stationId, seat, rentalId, token, pin, now, now, now)
+      sql.insertRequest.run(type, userId, itemId, quantity, zoneId, seat, rentalId, token, pin, now, now, now)
         .lastInsertRowid,
     );
   }
@@ -139,36 +141,34 @@ export function createRentalService(db, bus) {
     });
   }
 
-  function createRentalRequest({ userId, itemId, quantity = 1, stationId, seat }) {
+  function createRentalRequest({ userId, itemId, quantity = 1, seat }) {
     const item = sql.item.get(itemId);
     if (!item) throw new HttpError(404, '없는 물품입니다.');
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > item.max_quantity) {
       throw new HttpError(400, `한 번에 ${item.max_quantity}개까지 신청할 수 있어요.`);
     }
-    requireStation(stationId);
-    seat = seatOf(seat);
+    const place = placeOf(seat);
     requireNoOpenRequest(userId);
     const id = transaction(db, () => {
       // 재고를 신청 시점에 예약한다. 실패·취소·만료되면 transition()에서 복구된다.
       if (sql.reserveItem.run(quantity, itemId, quantity).changes === 0) throw new HttpError(409, '남은 재고가 부족해요.');
-      return insertRequest({ type: 'rental', userId, itemId, quantity, stationId, seat });
+      return insertRequest({ type: 'rental', userId, itemId, quantity, ...place });
     });
     emitItems();
     emitRequest(id);
     return toPublic(sql.request.get(id));
   }
 
-  function createReturnRequest({ userId, rentalId, stationId, seat }) {
+  function createReturnRequest({ userId, rentalId, seat }) {
     const rental = sql.rental.get(rentalId);
     if (!rental || rental.user_id !== userId) throw new HttpError(404, '없는 대여 기록입니다.');
     if (rental.status !== RentalStatus.ACTIVE) throw new HttpError(409, '반납할 수 있는 상태가 아닙니다.');
-    requireStation(stationId);
-    seat = seatOf(seat);
+    const place = placeOf(seat);
     requireNoOpenRequest(userId);
     const id = transaction(db, () => {
       sql.setRentalStatus.run(RentalStatus.RETURNING, rentalId);
       return insertRequest({
-        type: 'return', userId, itemId: rental.item_id, quantity: rental.quantity, stationId, seat, rentalId,
+        type: 'return', userId, itemId: rental.item_id, quantity: rental.quantity, ...place, rentalId,
       });
     });
     emitRental(rentalId);
@@ -184,12 +184,13 @@ export function createRentalService(db, bus) {
     transaction(db, () => {
       const now = Date.now();
       sql.setStatus.run(to, reason, now, now, id);
+      if (to === S.MOVING) sql.setDepartedAt.run(now, id);
       if (to === S.ARRIVED) sql.setArrivedAt.run(now, id);
       if (to === S.COMPLETED) {
         if (req.type === 'rental') {
           const status = req.item_kind === 'consumable' ? RentalStatus.CONSUMED : RentalStatus.ACTIVE;
           rentalId = Number(
-            sql.insertRental.run(req.user_id, req.item_id, req.quantity, req.station_id, req.seat, status, now).lastInsertRowid,
+            sql.insertRental.run(req.user_id, req.item_id, req.quantity, req.zone_id, req.seat, status, now).lastInsertRowid,
           );
           sql.linkRental.run(rentalId, id);
         } else {
@@ -259,7 +260,7 @@ export function createRentalService(db, bus) {
     toPublic,
     catalog,
     listItems: () => sql.items.all(),
-    listStations: () => sql.stations.all(),
+    listZones: () => sql.zones.all(),
     listRequests: ({ userId } = {}) =>
       (userId ? sql.requestsOfUser.all(userId) : sql.recentRequests.all()).map(toPublic),
     openRequests: () => sql.openRequests.all(),

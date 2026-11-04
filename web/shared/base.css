@@ -165,7 +165,7 @@ label.check {
   white-space: nowrap;
 }
 
-.badge.s-queued { background: var(--info-soft); color: var(--info); }
+.badge.s-queued, .badge.s-preparing { background: var(--info-soft); color: var(--info); }
 .badge.s-moving, .badge.s-arrived, .badge.s-verified { background: var(--primary-soft); color: var(--primary); }
 .badge.s-completed { background: var(--surface-2); color: var(--muted); }
 .badge.s-failed, .badge.s-expired { background: var(--danger-soft); color: var(--danger); }
