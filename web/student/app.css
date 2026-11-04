@@ -701,6 +701,39 @@ button {
   border: 1px solid var(--line);
 }
 
+.auth .pin {
+  display: flex;
+  gap: 8px;
+}
+
+.auth .pin span {
+  width: 44px;
+  height: 52px;
+  border-radius: 12px;
+  background: var(--mint);
+  color: var(--green);
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-card {
+  display: grid;
+  gap: 10px;
+}
+
+.map-card h2 {
+  font-size: 15px;
+}
+
+.map-card canvas {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+}
+
 .dev-code {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 11px;

@@ -14,106 +14,255 @@
   }
 }
 
-/* TEMI 태블릿 화면 (10.1인치, 가로) */
+/* TEMI 태블릿 화면 (10.1인치, 가로). 학생 앱 "도서관 온기"와 같은 색·모양을 쓴다
+   (temi-android/.../MainActivity.kt 도 같은 값) */
 .temi {
+  --t-bg: #f7f6f2;
+  --t-surface: #ffffff;
+  --t-line: #ebe8e1;
+  --t-text: #1e2724;
+  --t-text-2: #4a5551;
+  --t-green: #2d6e62;
+  --t-mint: #e5f0eb;
+  --t-warm: #f3eee3;
+  --t-warm-text: #7f6440;
+  --t-brown: #a0642b;
   position: relative;
   aspect-ratio: 16 / 10;
-  background: #0d1715;
+  background: var(--t-bg);
   border: 10px solid #222;
   border-radius: 22px;
   overflow: hidden;
-  color: #f2f7f5;
+  color: var(--t-text);
+  font-family: 'Pretendard', 'Malgun Gothic', system-ui, sans-serif;
+  container-type: size;
+  word-break: keep-all;
 }
 
 .screen {
   position: absolute;
   inset: 0;
   display: grid;
-  place-items: center;
-  padding: 4%;
-  text-align: center;
+  align-items: center;
+  padding: 6cqh 6cqw;
 }
 
-.scr {
+/* 이동 중: 터치를 막는다 */
+.screen[data-state='moving'] {
+  pointer-events: none;
+  background: var(--t-mint);
+}
+
+.t-split {
   display: grid;
-  gap: 2.2cqh;
-  justify-items: center;
+  grid-template-columns: 1fr 1fr;
+  gap: 5cqw;
+  align-items: center;
+}
+
+.t-split.map {
+  grid-template-columns: 1.25fr 1fr;
+}
+
+.t-col {
+  display: grid;
+  gap: 2.6cqh;
+  justify-items: start;
+}
+
+.t-brand {
+  color: var(--t-green);
+  font-size: 3.6cqh;
+  font-weight: 800;
+}
+
+.t-title {
+  margin: 0;
+  font-size: 7cqh;
+  line-height: 1.3;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.t-title.big {
+  font-size: 11cqh;
+  color: var(--t-green);
+}
+
+.t-lead {
+  margin: 0;
+  font-size: 3.6cqh;
+  color: var(--t-text-2);
+  line-height: 1.5;
+}
+
+.t-lead.strong {
+  color: var(--t-text);
+  font-weight: 700;
+}
+
+.t-chip {
+  display: inline-block;
+  padding: 0.8cqh 2.4cqh;
+  border-radius: 999px;
+  background: var(--t-mint);
+  color: var(--t-green);
+  font-size: 2.8cqh;
+  font-weight: 700;
+}
+
+.screen[data-state='moving'] .t-chip {
+  background: var(--t-surface);
+}
+
+.t-art {
+  background: var(--t-mint);
+  border-radius: 4cqh;
+  padding: 6cqh;
+}
+
+.t-art .art {
+  display: block;
   width: 100%;
 }
 
-.temi {
-  container-type: size;
+.t-card {
+  justify-self: stretch;
+  background: var(--t-surface);
+  border-radius: 3cqh;
+  padding: 3.4cqh 4cqh;
+  display: grid;
+  gap: 2cqh;
+  box-shadow: 0 0.4cqh 2.4cqh rgb(30 39 36 / 6%);
 }
 
-.scr h1 {
-  font-size: 6cqh;
-}
-
-.scr p {
-  margin: 0;
-  font-size: 3.4cqh;
-  color: #b9cbc5;
-}
-
-.scr .eyebrow {
-  font-size: 2.6cqh;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #5cc4a6;
-}
-
-.scr .big {
-  font-size: 4.2cqh;
-  color: #fff;
-  font-weight: 700;
-}
-
-.eyes {
+.t-kv {
   display: flex;
-  gap: 8cqh;
-  margin-bottom: 2cqh;
+  justify-content: space-between;
+  gap: 3cqh;
+  font-size: 3.4cqh;
 }
 
-.eyes span {
-  width: 9cqh;
-  height: 9cqh;
-  border-radius: 50%;
-  background: #5cc4a6;
-  animation: blink 5s infinite;
+.t-kv span {
+  color: #858d89;
 }
 
-@keyframes blink {
-  0%, 94%, 100% { transform: scaleY(1); }
-  97% { transform: scaleY(0.1); }
-}
-
-.temi-btn {
-  border: none;
-  border-radius: 1.6cqh;
-  background: #5cc4a6;
-  color: #08231b;
-  font-size: 4.2cqh;
+.t-warn {
+  border-top: 1px solid var(--t-line);
+  padding-top: 2cqh;
+  color: var(--t-brown);
   font-weight: 700;
-  padding: 0 10cqh;
-  height: 12cqh; /* 서서 누르는 버튼이라 크게 */
-  margin-top: 2cqh;
+  font-size: 3cqh;
+}
+
+.t-notice {
+  justify-self: stretch;
+  background: var(--t-warm);
+  color: var(--t-warm-text);
+  border-radius: 3cqh;
+  padding: 3.4cqh 4cqh;
+  font-size: 3.8cqh;
+  font-weight: 700;
+  white-space: pre-line;
+}
+
+/* 서서 누르는 버튼이라 크게 */
+.t-btn {
+  justify-self: stretch;
+  border: none;
+  border-radius: 2.6cqh;
+  background: var(--t-green);
+  color: #fff;
+  font: inherit;
+  font-size: 4.6cqh;
+  font-weight: 800;
+  height: 13cqh;
   cursor: pointer;
 }
 
-.temi-btn:active {
-  background: #46a88b;
+.t-btn:active {
+  background: #245a50;
 }
 
-/* 이동 중: 화면을 어둡게 하고 터치를 막는다 */
-.screen[data-state='moving'] {
-  background: #050a09;
-  pointer-events: none;
-}
-
-.moving-text {
-  font-size: 7cqh !important;
+.t-btn.ghost {
+  justify-self: start;
+  background: var(--t-surface);
+  color: var(--t-text-2);
+  border: 2px solid var(--t-line);
+  font-size: 3.2cqh;
   font-weight: 700;
-  color: #4d5d58 !important;
+  height: 9cqh;
+  padding: 0 5cqh;
+}
+
+.t-camera {
+  aspect-ratio: 1;
+  border-radius: 4cqh;
+  background: #1e2724;
+  color: #b9cbc5;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  font-size: 3.6cqh;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.t-camera small {
+  font-size: 2.4cqh;
+  font-weight: 500;
+  color: #858d89;
+}
+
+.t-map {
+  width: 100%;
+  display: block;
+  border-radius: 3cqh;
+  background: var(--t-surface);
+}
+
+/* PIN 예비 인증 */
+.t-pin {
+  display: flex;
+  gap: 2cqh;
+}
+
+.t-pin span {
+  width: 10cqh;
+  height: 12cqh;
+  border-radius: 2cqh;
+  background: var(--t-mint);
+  color: var(--t-green);
+  display: grid;
+  place-items: center;
+  font-size: 5cqh;
+}
+
+.t-keys {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.8cqh;
+}
+
+.t-keys button {
+  border: 1px solid var(--t-line);
+  border-radius: 2.4cqh;
+  background: var(--t-surface);
+  color: var(--t-text);
+  font: inherit;
+  font-size: 5cqh;
+  font-weight: 700;
+  height: 13cqh;
+  cursor: pointer;
+}
+
+.t-keys button.sub {
+  color: var(--t-text-2);
+  font-size: 3.4cqh;
+}
+
+.t-keys button:active {
+  background: var(--t-mint);
 }
 
 .banner {
@@ -121,8 +270,8 @@
   left: 50%;
   top: 4%;
   transform: translateX(-50%);
-  background: #f2f7f5;
-  color: #0d1715;
+  background: var(--t-text);
+  color: #fff;
   padding: 1.6cqh 4cqh;
   border-radius: 999px;
   font-size: 3cqh;
@@ -131,7 +280,7 @@
 }
 
 .banner.error {
-  background: #f2877f;
+  background: #c0392b;
 }
 
 /* 개발 패널 */

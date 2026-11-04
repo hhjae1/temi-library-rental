@@ -6,7 +6,7 @@ export function createEventHub(bus) {
     const chunk = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of clients) res.write(chunk);
   };
-  for (const event of ['request', 'items', 'rental', 'robot']) bus.on(event, (data) => broadcast(event, data));
+  for (const event of ['request', 'items', 'rental', 'robot', 'position']) bus.on(event, (data) => broadcast(event, data));
 
   const keepAlive = setInterval(() => {
     for (const res of clients) res.write(': ping\n\n');

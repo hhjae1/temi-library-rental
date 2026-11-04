@@ -1,6 +1,7 @@
 // 학생 앱 (Figma "도서관 온기" 시안 기준)
 // 화면: 대여 홈 → 물품 상세 → 배달 위치 선택 → temi 배달 현황 → 나의 대여 현황 (+ 이용 안내)
 import { $, api, esc, OPEN_STATUSES, storage, subscribe, toast } from '/shared/api.js';
+import { drawMap, loadMap } from '/shared/map.js';
 import { icon, illustration } from './illustrations.js';
 
 const USER_KEY = 'tlr.userId';
@@ -13,9 +14,10 @@ const state = {
   robot: null,
   requests: [],
   rentals: [],
-  auth: null, // 도착 시 temi에 보여줄 QR { requestId, payload, qrDataUrl }
+  auth: null, // 도착 시 temi에 보여줄 QR과 예비 PIN { requestId, payload, pin, qrDataUrl }
   detail: null, // 물품 상세 선택 { categoryId, itemId, quantity, guideOk }
   draft: null, // 좌석 입력 중인 요청 { mode, itemId, quantity, rentalId, seat }
+  mapData: null, // TEMI 맵 (temi가 보내 준 적이 있으면)
 };
 
 const root = $('#app');
@@ -73,6 +75,7 @@ const lastSeat = () => storage.get(SEAT_KEY) ?? '';
 
 async function loadAll() {
   [state.catalog, state.info, state.robot] = await Promise.all([api('/catalog'), api('/info'), api('/robot')]);
+  state.mapData = await loadMap(state.robot.mapVersion).catch(() => null);
   if (state.userId) await loadMine();
 }
 
@@ -118,9 +121,16 @@ async function run(action) {
 subscribe({
   items: () => run(async () => ((state.catalog = await api('/catalog')), render())),
   robot(robot) {
+    const mapChanged = robot.mapVersion !== state.robot?.mapVersion;
     state.robot = robot;
     const pill = $('#robot-pill');
     if (pill) pill.outerHTML = robotPill();
+    if (mapChanged) run(async () => ((state.mapData = await loadMap(robot.mapVersion)), render()));
+  },
+  // 이동 중 1초에 몇 번씩 온다. 화면 전체 대신 지도만 다시 그린다
+  position(position) {
+    if (state.robot) state.robot.position = position;
+    paintMiniMap();
   },
   request(req) {
     if (req.user_id === state.userId) run(async () => (await loadMine(), render()));
@@ -420,6 +430,9 @@ function viewDelivery(r) {
           <h3>${icon('qr', 'sm')} temi 카메라에 QR 코드를 보여주세요</h3>
           <img src="${state.auth.qrDataUrl}" alt="인증용 QR 코드" />
           <p class="caption">잘 읽히지 않으면 화면 밝기를 높여주세요.</p>
+          <div class="divider" style="width:100%"></div>
+          <p class="caption">QR이 안 되면 temi 화면에서 'PIN으로 인증'을 누르고 입력하세요.</p>
+          <div class="pin" aria-label="PIN ${esc(state.auth.pin)}">${[...state.auth.pin].map((n) => `<span>${n}</span>`).join('')}</div>
           <p class="dev-code" title="시뮬레이터의 'QR 스캔 흉내' 칸에 붙여 넣으세요">개발용 코드: ${esc(state.auth.payload)}</p>
         </section>`
       : r.status === 'verified'
@@ -454,6 +467,15 @@ function viewDelivery(r) {
         </div>
         <ol class="steps">${steps}</ol>
       </section>
+
+      ${
+        state.mapData
+          ? `<section class="card map-card">
+              <div class="section-head"><h2>temi 실시간 위치</h2><span class="caption">${esc(r.seat)}번 좌석 구역까지</span></div>
+              <canvas id="mini-map" aria-label="도서관 지도 위 temi 현재 위치"></canvas>
+            </section>`
+          : ''
+      }
 
       <section class="card summary">
         <div class="kv"><span>${isRental ? '받을 물품' : '돌려줄 물품'}</span><b>${esc(itemLabel(r))} · ${r.quantity}개</b></div>
@@ -577,7 +599,7 @@ function viewGuide() {
           <li>대여 홈에서 필요한 물품과 수량을 골라요.</li>
           <li>지금 앉은 좌석 번호를 입력해요.</li>
           <li>대여 데스크에서 물품을 싣고 temi가 출발해요.</li>
-          <li>temi가 도착하면 앱의 QR 코드를 temi 카메라에 보여줘요.</li>
+          <li>temi가 도착하면 앱의 QR 코드를 temi 카메라에 보여줘요. QR이 안 되면 앱의 PIN을 temi 화면에 입력해요.</li>
           <li>바구니에서 물품을 꺼내고 '물품을 받았어요'를 눌러요.</li>
           <li>다 쓰면 대여 현황에서 반납을 요청해요.</li>
         </ol>
@@ -613,12 +635,24 @@ function render() {
   else if (hash === '#/guide') html = viewGuide();
   else html = viewHome();
   root.innerHTML = html;
+  paintMiniMap();
 
   if (focused) {
     const el = document.getElementById(focused);
     el?.focus();
     if (caret != null) el?.setSelectionRange?.(caret, caret);
   }
+}
+
+function paintMiniMap() {
+  const canvas = $('#mini-map');
+  const active = activeRequest();
+  if (!canvas || !state.mapData || !active) return;
+  drawMap(canvas, state.mapData, {
+    robot: state.robot?.position,
+    target: active.temi_location,
+    targetLabel: `${active.seat}번 좌석`,
+  });
 }
 
 window.addEventListener('hashchange', () => {

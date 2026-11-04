@@ -8,11 +8,42 @@ export function createRobotLink({ server, bus, path = '/ws/robot', log = console
   const wss = new WebSocketServer({ server, path });
   const handlers = [];
   let socket = null;
-  const snapshot = { connected: false, state: RobotState.OFFLINE, robotId: null, requestId: null, lastSeen: null };
+  const snapshot = {
+    connected: false,
+    state: RobotState.OFFLINE,
+    robotId: null,
+    requestId: null,
+    lastSeen: null,
+    position: null, // TEMI 맵 좌표 { x, y, yaw, at }
+    mapVersion: null, // 맵을 받을 때마다 바뀐다. 화면은 바뀌면 GET /api/robot/map 으로 다시 받는다
+  };
+  let map = null; // TEMI 맵 이미지(PNG)와 좌표 정보. 크기가 커서 snapshot과 따로 둔다
 
   function update(patch) {
     Object.assign(snapshot, patch);
     bus.emit('robot', { ...snapshot });
+  }
+
+  // 위치는 1초에 몇 번씩 오므로 'robot' 전체 대신 가벼운 'position' 이벤트만 보낸다
+  function onPosition(msg) {
+    const { x, y, yaw } = msg;
+    if (![x, y].every(Number.isFinite)) return;
+    snapshot.position = { x, y, yaw: Number.isFinite(yaw) ? yaw : 0, at: Date.now() };
+    snapshot.lastSeen = snapshot.position.at;
+    bus.emit('position', snapshot.position);
+  }
+
+  function onMap(msg) {
+    const { png, width, height, originX, originY, resolution } = msg;
+    if (typeof png !== 'string' || ![width, height, originX, originY, resolution].every(Number.isFinite)) {
+      return log.warn('[robot] 잘못된 map 메시지');
+    }
+    const locations = (msg.locations ?? [])
+      .filter((l) => typeof l?.name === 'string' && Number.isFinite(l.x) && Number.isFinite(l.y))
+      .map(({ name, x, y }) => ({ name, x, y }));
+    map = { png, width, height, originX, originY, resolution, locations, name: msg.name ?? null };
+    update({ mapVersion: Date.now(), lastSeen: Date.now() });
+    log.info(`[robot] 맵 수신 ${width}x${height}, 위치 ${locations.length}개`);
   }
 
   wss.on('connection', (ws) => {
@@ -30,6 +61,8 @@ export function createRobotLink({ server, bus, path = '/ws/robot', log = console
       } catch {
         return log.warn('[robot] invalid JSON');
       }
+      if (msg.type === 'position') return onPosition(msg);
+      if (msg.type === 'map') return onMap(msg);
       const patch = { lastSeen: Date.now() };
       if (msg.type === 'hello') Object.assign(patch, { robotId: msg.robotId ?? null, state: msg.state ?? RobotState.IDLE });
       if (msg.type === 'status') {
@@ -60,6 +93,7 @@ export function createRobotLink({ server, bus, path = '/ws/robot', log = console
       return snapshot.connected;
     },
     snapshot: () => ({ ...snapshot }),
+    map: () => map,
     send(msg) {
       if (!socket || socket.readyState !== socket.OPEN) return false;
       socket.send(JSON.stringify(msg));

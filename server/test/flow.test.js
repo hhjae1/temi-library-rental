@@ -213,3 +213,48 @@ test('인증 후 수령 확인이 없으면 만료하고 재고를 되돌린다'
     await fast.close();
   }
 });
+
+test('QR이 안 되면 앱의 PIN으로도 인증할 수 있다 (예비 인증)', async () => {
+  const robot = await connectRobot();
+  const user = 'S2024009';
+  await call('/requests', { method: 'POST', body: { userId: user, type: 'rental', itemId: 5, seat: '50' } }); // 물티슈
+  const goTo = await robot.next('goTo');
+  robot.send({ type: 'status', requestId: goTo.requestId, state: 'moving' });
+  robot.send({ type: 'status', requestId: goTo.requestId, state: 'arrived' });
+  const arrived = await waitStatus(goTo.requestId, user, 'arrived');
+  assert.match(arrived.auth.pin, /^\d{4}$/);
+  robot.send({ type: 'verify', requestId: goTo.requestId, code: arrived.auth.pin });
+  assert.equal((await robot.next('verifyResult')).ok, true);
+  robot.send({ type: 'complete', requestId: goTo.requestId });
+  assert.equal((await robot.next('end')).status, 'completed');
+  await robot.next('goHome');
+  robot.backHome();
+  robot.close();
+});
+
+test('TEMI 맵과 실시간 위치를 받아 화면에 넘겨준다', async () => {
+  const robot = await connectRobot();
+  const png = Buffer.from('fake-png').toString('base64');
+  robot.send({
+    type: 'map', png, width: 200, height: 100, originX: -2, originY: -1, resolution: 0.05,
+    locations: [{ name: 'home base', x: 0, y: 0 }, { name: 'humanities-a', x: 3, y: 1.5 }, { name: 1, x: 'bad' }],
+  });
+  let snap;
+  for (let i = 0; i < 50 && !snap?.mapVersion; i++) {
+    await sleep(20);
+    snap = (await call('/robot')).data;
+  }
+  assert.ok(snap.mapVersion, '맵을 받으면 mapVersion이 생긴다');
+  const { map } = (await call('/robot/map')).data;
+  assert.equal(map.png, png);
+  assert.deepEqual(map.locations.map((l) => l.name), ['home base', 'humanities-a'], '잘못된 위치는 버린다');
+
+  robot.send({ type: 'position', x: 1.25, y: 0.5, yaw: 1.57 });
+  let position;
+  for (let i = 0; i < 50 && !position; i++) {
+    await sleep(20);
+    position = (await call('/robot')).data.position;
+  }
+  assert.deepEqual({ x: position.x, y: position.y, yaw: position.yaw }, { x: 1.25, y: 0.5, yaw: 1.57 });
+  robot.close();
+});

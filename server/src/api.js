@@ -41,6 +41,8 @@ export function createApi({ service, dispatcher, robot, config }) {
     }),
   );
   api.get('/robot', wrap(() => robot.snapshot()));
+  // TEMI 맵 (PNG data URL + 좌표 변환 정보). 아직 받지 못했으면 map: null
+  api.get('/robot/map', wrap(() => ({ map: robot.map() })));
 
   api.get('/requests', wrap((req) => service.listRequests({ userId: userIdOf(req.query.userId) })));
 
