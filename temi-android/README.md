@@ -38,7 +38,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n kr.ac.kw.temirental/.MainActivity
 ```
 
-처음 실행하면 카메라 권한을 허용한다. 서버 주소 기본값은 `ws://172.20.10.2:3000/ws/robot`이고,
+처음 실행하면 카메라 권한을 허용한다. 서버 주소 기본값은 AWS 서버 `ws://54.117.20.190/ws/robot`이고 (PC에서 서버를 돌릴 때는 `ws://<PC IP>:3000/ws/robot`),
 **화면 왼쪽 위 상태 줄을 길게 누르면** 바꿀 수 있다. 같은 창에 TEMI 맵에 저장된 위치 목록도 나온다.
 
 ## 현장에서 맞출 것

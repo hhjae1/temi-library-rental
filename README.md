@@ -25,6 +25,27 @@ npm start
 
 같은 Wi-Fi의 폰에서 `http://<PC IP>:3000/`으로 접속하면 학생 앱을 폰으로 볼 수 있다.
 
+## AWS 서버 (배포본)
+
+`main`을 AWS EC2(서울, t3.micro, 무료 플랜)에 올려 두었다. PC를 켜 두지 않아도 된다.
+
+| 화면 | 주소 |
+|---|---|
+| 학생 앱 | http://54.117.20.190/ |
+| TEMI 시뮬레이터 | http://54.117.20.190/robot/ |
+| 관리자 (아이디 `admin`, 비밀번호는 팀 내 공유) | http://54.117.20.190/admin/ |
+| TEMI 앱 서버 주소 (앱 기본값) | `ws://54.117.20.190/ws/robot` |
+
+- 구성: nginx(80번) → Node 서버(3000번, systemd `temi-rental`). 데이터는 서버의 `server/data/app.db`.
+- **`main`에 병합한 뒤 서버에 반영하기** (관리 권한이 있는 사람만, AWS CLI 로그인 필요):
+
+  ```bash
+  aws ssm send-command --instance-ids i-0af56579a4627975b --document-name AWS-RunShellScript --parameters commands="/opt/temi-library-rental/deploy.sh"
+  ```
+
+- 서버 로그 보기: `aws ssm start-session --target i-0af56579a4627975b` 접속 후 `journalctl -u temi-rental -f`
+- 실제 TEMI 앱과 시뮬레이터를 동시에 켜 두면 서버가 로봇 1대만 받아서 서로 연결을 끊는다. 시험할 때는 하나만 켠다.
+
 ### 시연 순서
 
 1. 시뮬레이터 탭과 학생 앱 탭을 나란히 연다.

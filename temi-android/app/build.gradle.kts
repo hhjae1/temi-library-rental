@@ -14,7 +14,8 @@ android {
         versionName = "0.1.0"
 
         // 처음 실행할 때 접속할 서버. TEMI 화면 왼쪽 위 상태 줄을 길게 누르면 바꿀 수 있다.
-        buildConfigField("String", "DEFAULT_SERVER_URL", "\"ws://172.20.10.2:3000/ws/robot\"")
+        // AWS EC2 서버 (nginx 80번 → Node 3000번). PC에서 서버를 돌릴 때는 ws://<PC IP>:3000/ws/robot
+        buildConfigField("String", "DEFAULT_SERVER_URL", "\"ws://54.117.20.190/ws/robot\"")
     }
 
     buildFeatures {
